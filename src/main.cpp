@@ -1,0 +1,60 @@
+#include <errno.h>
+#include <poll.h>
+#include <string.h>
+#include <wiringPi.h>
+#include <wiringPiSPI.h>
+
+#include <cstdint>
+#include <cstdio>
+
+#include "mcp2515.h"
+#include "queue.h"
+
+int main() {
+  if (mcp2515_init()) {
+    return -1;
+  }
+  // set to listen only mode
+  mcp2515_bit_modify(CANCTRL, OP_MODE_MASK, OP_MODE_NORMAL);
+
+  printf("Done configuring CAN controller:\n");
+  {
+    uint8_t buffer[18] = {0};
+    for (uint8_t addr = 0; addr < 0x80; addr += 0x10) {
+      uint8_t *result = mcp2515_read(addr, buffer, 16);
+      for (int i = 0; i < 16; ++i) {
+        printf(" %02x", result[i]);
+      }
+      printf("\n");
+    }
+  }
+
+  printf("\nlistening...\n");
+
+  while (true) {
+    auto message = queue_remove();
+    if (message == nullptr) {
+      continue;
+    }
+    if (!message->is_extended) {
+      printf("std[ %02x %02x ]: ", static_cast<uint8_t>(message->id >> 8),
+             static_cast<uint8_t>(message->id));
+    } else {
+      printf(
+          "ext[ %02x %02x %2x %2x ]:", static_cast<uint8_t>(message->id >> 24),
+          static_cast<uint8_t>(message->id >> 16),
+          static_cast<uint8_t>(message->id >> 8),
+          static_cast<uint8_t>(message->id));
+    }
+    if (message->is_remote) {
+      printf(" REMOTE\n");
+    } else {
+      for (int i = 0; i < message->data_length; ++i) {
+        printf(" %02x", message->data[i]);
+      }
+      printf("\n");
+    }
+  }
+
+  return 0;
+}
