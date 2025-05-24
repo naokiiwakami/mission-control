@@ -12,6 +12,8 @@
 // SPI channel (0 for /dev/spidev0.0)
 #define SPI_CHANNEL 0
 
+static void mcp2515_write(uint8_t *buffer, size_t length);
+
 static void mcp2515_configure_1meg_bps();
 static void mcp2515_configure_receive_buffer_0();
 static void mcp2515_configure_receive_buffer_1();
@@ -36,16 +38,23 @@ uint8_t mcp2515_init() {
   mcp2515_configure_receive_buffer_1();
   mcp2515_configure_RXnBF_pins();
 
-  if (wiringPiISR(29, INT_EDGE_FALLING, mcp2515_consume_rx_data)) {
+  // Enable pin down interrupt. Connect the RX0BF (11) pin on the MCP2515 chip
+  // to the GPIO 1 pin (physical 28 pin) on the 40-pin Raspberry Pi.
+  const int kPin = 31;  // 29
+  if (wiringPiISR(kPin, INT_EDGE_FALLING, mcp2515_consume_rx_data)) {
     fprintf(stderr, "ISR setup failed\n");
     return 1;
   }
+
+  // set to normal mode
+  mcp2515_bit_modify(CANCTRL, OP_MODE_MASK, OP_MODE_NORMAL);
+
   return 0;
 }
 
 void mcp2515_reset() {
   uint8_t buf[1] = {MCP_RESET};
-  mcp2515_write(SPI_CHANNEL, buf, 1);
+  mcp2515_write(buf, 1);
   usleep(10000);  // Wait 10ms for reset
 }
 
@@ -162,7 +171,7 @@ void mcp2515_configure_RXnBF_pins() {
   mcp2515_write_register(BFPCTRL, value);
 }
 
-void mcp2515_write(uint8_t address, uint8_t *buffer, size_t length) {
+void mcp2515_write(uint8_t *buffer, size_t length) {
   wiringPiSPIDataRW(SPI_CHANNEL, buffer, length);
 }
 
@@ -175,7 +184,7 @@ uint8_t *mcp2515_read(uint8_t address, uint8_t *buffer, size_t length) {
 
 void mcp2515_write_register(uint8_t address, uint8_t value) {
   uint8_t buf[3] = {MCP_WRITE, address, value};
-  mcp2515_write(SPI_CHANNEL, buf, 3);
+  mcp2515_write(buf, 3);
 }
 
 uint8_t mcp2515_read_register(uint8_t address) {
@@ -220,6 +229,36 @@ static void mcp2515_read_into_queue() {
 }
 
 void mcp2515_consume_rx_data() {
-  mcp2515_read_into_queue();
   mcp2515_bit_modify(CANINTF, (1 << CANINTF_RX0IF_BIT), 0);
+  mcp2515_read_into_queue();
+}
+
+int mcp2515_set_can_id_std(uint8_t *buffer, uint16_t id, uint8_t data_length) {
+  int index = 2;  // skip instruction and address
+  //               7     6     5     4     3     2     1     0
+  // TXBnSIDH: SID10  SID9  SID8  SID7  SID6  SID5  SID4  SID3
+  // TXBnSIDL:  SID2  SID1  SID0   -   EXIDE   -   EID17 EID16
+  id <<= 5;
+  buffer[index + 1] = (uint8_t)id;  // TXBnSIDH
+  id >>= 8;
+  buffer[index] = (uint8_t)id;  // TXBnSIDL
+
+  index += 2;
+  buffer[index++] = 0;  // TXBnEID8
+  buffer[index++] = 0;  // TXBnEID0
+
+  // TXBnDLC :   -    RTR     -    -   DLC3  DLC2  DLC1  DLC0
+  buffer[index++] = data_length & 0xf;  // TXBnDLC
+
+  return index;
+}
+
+void mcp2515_message_request_to_send_txb0(uint8_t *buffer,
+                                          size_t buffer_length) {
+  // put the instruction and the address
+  buffer[0] = MCP_WRITE;
+  buffer[1] = TXB0SIDH;
+  mcp2515_write(buffer, buffer_length);
+  uint8_t internal_buf[1] = {MCP_RTS_TXB0};
+  mcp2515_write(internal_buf, 1);
 }

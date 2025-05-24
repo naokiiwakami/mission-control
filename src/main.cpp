@@ -8,14 +8,13 @@
 #include <cstdio>
 
 #include "mcp2515.h"
+#include "module_manager.h"
 #include "queue.h"
 
 int main() {
   if (mcp2515_init()) {
     return -1;
   }
-  // set to listen only mode
-  mcp2515_bit_modify(CANCTRL, OP_MODE_MASK, OP_MODE_NORMAL);
 
   printf("Done configuring CAN controller:\n");
   {
@@ -28,6 +27,8 @@ int main() {
       printf("\n");
     }
   }
+
+  auto module_manager = new analog3::ModuleManager();
 
   printf("\nlistening...\n");
 
@@ -54,6 +55,7 @@ int main() {
       }
       printf("\n");
     }
+    module_manager->HandleMessage(message);
   }
 
   return 0;
