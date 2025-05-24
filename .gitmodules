@@ -1,0 +1,3 @@
+[submodule "can-controller"]
+	path = can-controller
+	url = git@github.com:naokiiwakami/can-controller.git

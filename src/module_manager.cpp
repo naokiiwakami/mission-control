@@ -3,7 +3,8 @@
 #include <stdio.h>
 
 #include "analog3.h"
-#include "mcp2515.h"
+#include "can-controller/api.h"
+#include "can-controller/device/mcp2515.h"
 
 namespace analog3 {
 
@@ -23,15 +24,20 @@ void ModuleManager::HandleMessage(can_message_t *message) {
 
 void ModuleManager::AssignModuleId(can_message_t *message) {
   uint8_t module_id = 0x03;
-  uint8_t local_buf[16];
-  int index = mcp2515_set_can_id_std(local_buf, A3_ID_MISSION_CONTROL, 6);
-  local_buf[index++] = A3_MC_ASSIGN_MODULE_ID;
-  local_buf[index++] = message->id >> 24;
-  local_buf[index++] = message->id >> 16;
-  local_buf[index++] = message->id >> 8;
-  local_buf[index++] = message->id;
-  local_buf[index++] = module_id;
-  mcp2515_message_request_to_send_txb0(local_buf, index);
+
+  // TODO: Make an A3 API?
+  auto *response = can_create_message();
+  response->id = A3_ID_MISSION_CONTROL;
+  response->is_extended = 0;
+  response->is_remote = 0;
+  response->data_length = 6;
+  response->data[0] = A3_MC_ASSIGN_MODULE_ID;  // opcode
+  response->data[1] = message->id >> 24;       // the target unique ID
+  response->data[2] = message->id >> 16;
+  response->data[3] = message->id >> 8;
+  response->data[4] = message->id;
+  response->data[5] = module_id;  // assigned module ID
+  can_send_message(response);
 }
 
 }  // namespace analog3

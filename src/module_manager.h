@@ -1,6 +1,6 @@
 #pragma once
 
-#include "can_message.h"
+#include "can-controller/can_message.h"
 
 namespace analog3 {
 

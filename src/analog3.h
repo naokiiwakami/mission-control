@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-#include "can_message.h"
+#include "can-controller/can_message.h"
 
 // ID assignments /////////////////////////////////
 #define A3_ID_MIDI_TIMING_CLOCK 0x100

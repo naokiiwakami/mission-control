@@ -7,12 +7,13 @@
 #include <cstdint>
 #include <cstdio>
 
-#include "mcp2515.h"
+#include "can-controller/api.h"
+#include "can-controller/device/mcp2515.h"
 #include "module_manager.h"
 #include "queue.h"
 
 int main() {
-  if (mcp2515_init()) {
+  if (can_init()) {
     return -1;
   }
 
@@ -56,7 +57,11 @@ int main() {
       printf("\n");
     }
     module_manager->HandleMessage(message);
+    can_free_message(message);
   }
 
   return 0;
 }
+
+// implement the callback function to handle a CAN RX message
+void can_consume_rx_message(can_message_t *message) { queue_add(message); }

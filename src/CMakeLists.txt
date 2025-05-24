@@ -1,13 +1,18 @@
 cmake_minimum_required(VERSION 3.10)
-project(mcp2515_init)
+project(mission_control)
 
 set(CMAKE_CXX_STANDARD 11)
 
 add_executable(mission_control
     main.cpp
-    mcp2515_impl.cpp
     module_manager.cpp
-    queue.cpp)
+    queue.cpp
+    ${CMAKE_SOURCE_DIR}/../can-controller/src/api.c
+    ${CMAKE_SOURCE_DIR}/../can-controller/src/mcp2515.c
+    )
+
+target_include_directories(
+    mission_control PRIVATE ${CMAKE_SOURCE_DIR}/../can-controller/include)
 
 find_library(WIRINGPI_LIB wiringPi REQUIRED)
 
