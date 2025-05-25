@@ -7,12 +7,12 @@ add_executable(mission_control
     main.cpp
     module_manager.cpp
     queue.cpp
-    ${CMAKE_SOURCE_DIR}/../can-controller/src/api.c
-    ${CMAKE_SOURCE_DIR}/../can-controller/src/mcp2515.c
+    ${CMAKE_SOURCE_DIR}/../can-controller/api.c
+    ${CMAKE_SOURCE_DIR}/../can-controller/mcp2515.c
     )
 
 target_include_directories(
-    mission_control PRIVATE ${CMAKE_SOURCE_DIR}/../can-controller/include)
+    mission_control PRIVATE ${CMAKE_SOURCE_DIR}/..)
 
 find_library(WIRINGPI_LIB wiringPi REQUIRED)
 
