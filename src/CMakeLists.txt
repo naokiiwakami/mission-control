@@ -11,6 +11,7 @@ add_executable(mission_control
     ${CMAKE_SOURCE_DIR}/../can-controller/mcp2515.c
     )
 
+add_definitions(-DCONTROLLER_PLATFORM_RASPBERRY_PI)
 target_include_directories(
     mission_control PRIVATE ${CMAKE_SOURCE_DIR}/..)
 

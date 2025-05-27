@@ -12,6 +12,26 @@
 #include "module_manager.h"
 #include "queue.h"
 
+static void ShowMessage(const can_message_t &message) {
+  if (!message.is_extended) {
+    printf("std[ %02x %02x ]: ", static_cast<uint8_t>(message.id >> 8),
+           static_cast<uint8_t>(message.id));
+  } else {
+    printf("ext[ %02x %02x %2x %2x ]:", static_cast<uint8_t>(message.id >> 24),
+           static_cast<uint8_t>(message.id >> 16),
+           static_cast<uint8_t>(message.id >> 8),
+           static_cast<uint8_t>(message.id));
+  }
+  if (message.is_remote) {
+    printf(" REMOTE\n");
+  } else {
+    for (int i = 0; i < message.data_length; ++i) {
+      printf(" %02x", message.data[i]);
+    }
+    printf("\n");
+  }
+}
+
 int main() {
   if (can_init()) {
     return -1;
@@ -38,24 +58,7 @@ int main() {
     if (message == nullptr) {
       continue;
     }
-    if (!message->is_extended) {
-      printf("std[ %02x %02x ]: ", static_cast<uint8_t>(message->id >> 8),
-             static_cast<uint8_t>(message->id));
-    } else {
-      printf(
-          "ext[ %02x %02x %2x %2x ]:", static_cast<uint8_t>(message->id >> 24),
-          static_cast<uint8_t>(message->id >> 16),
-          static_cast<uint8_t>(message->id >> 8),
-          static_cast<uint8_t>(message->id));
-    }
-    if (message->is_remote) {
-      printf(" REMOTE\n");
-    } else {
-      for (int i = 0; i < message->data_length; ++i) {
-        printf(" %02x", message->data[i]);
-      }
-      printf("\n");
-    }
+    ShowMessage(*message);
     module_manager->HandleMessage(message);
     can_free_message(message);
   }
