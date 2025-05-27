@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    let project_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     Command::new("sh")
-        .arg("../build-can-controller.sh")
+        .arg(format!("{}/../build-can-controller.sh", project_dir))
         .output()
         .expect("failed to build can-controller library");
 
-    let project_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     println!(
         "cargo:rustc-link-search={}/../can-controller/build",
         project_dir
@@ -19,7 +19,7 @@ fn main() {
     // The bindgen::Builder is the main entry point to bindgen,
     // and lets you build up options for the resulting bindings.
     let bindings = bindgen::Builder::default()
-        .clang_arg("-I..")
+        .clang_arg(format!("-I{}/..", project_dir))
         // The input header we would like to generate bindings for.
         .header("bindings.h")
         // Tell cargo to invalidate the built crate whenever any of the
@@ -36,18 +36,3 @@ fn main() {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
 }
-
-/*
-use std::process::Command;
-
-fn main() {
-    Command::new("sh")
-        .arg("-c")
-        .arg("cmake")
-        .arg("-DPLATFORM=raspberry-pi")
-        .arg("-B ../can-controller/build")
-        .arg("../can-controller")
-        .output()
-        .expect("failed to build can-controller library");
-}
-*/
