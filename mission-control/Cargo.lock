@@ -240,6 +240,7 @@ dependencies = [
  "bindgen",
  "env_logger",
  "lazy_static",
+ "libc",
  "log",
 ]
 

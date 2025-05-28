@@ -1,7 +1,7 @@
 // use crate::analog3::A3_ADMIN_REQUEST_ID;
 use crate::analog3 as a3;
-use crate::can_controller::CanController;
-use crate::can_controller::CanMessage;
+use crate::boundary::Boundary;
+use crate::boundary::CanMessage;
 
 /*
 // ID assignments /////////////////////////////////
@@ -21,11 +21,11 @@ pub const A3_MC_PING: u8 = 0x02;
 */
 
 pub struct ModuleManager<'a> {
-    can_controller: &'a CanController,
+    can_controller: &'a Boundary,
 }
 
 impl<'a> ModuleManager<'a> {
-    pub fn new(can_controller: &'a CanController) -> Self {
+    pub fn new(can_controller: &'a Boundary) -> Self {
         return Self {
             can_controller: can_controller,
         };
