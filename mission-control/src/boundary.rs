@@ -113,7 +113,8 @@ pub extern "C" fn notify_message(message: *mut can_message_t) {
 
 pub struct Boundary {
     epollfd: libc::c_int,
-    eventfd: libc::c_int,
+    rx_fd: libc::c_int,
+    tx_fd: libc::c_int,
 
     fd_to_event_type: HashMap<libc::c_int, EventType>,
 }
@@ -121,43 +122,72 @@ pub struct Boundary {
 // TODO: Make this singleton
 impl Boundary {
     pub fn new() -> Self {
-        let epollfd: libc::c_int;
-        let eventfd: libc::c_int;
-        let mut fd_to_event_type = HashMap::new();
+        let fd_to_event_type = HashMap::new();
+        let mut new_obj = Self {
+            epollfd: 0,
+            rx_fd: 0,
+            tx_fd: 0,
+            fd_to_event_type: fd_to_event_type,
+        };
         unsafe {
             // set up the epoll event listener
-            epollfd = libc::epoll_create1(0);
+            let epollfd = libc::epoll_create1(0);
             if epollfd < 0 {
                 // TODO: handle error
             }
-            eventfd = libc::eventfd(0, 0);
-            log::debug!("eventfd={}", eventfd);
-            let mut ev = libc::epoll_event {
-                events: libc::EPOLLIN as u32,
-                u64: eventfd as u64,
-            };
-            if libc::epoll_ctl(epollfd, libc::EPOLL_CTL_ADD, eventfd, &mut ev) < 0 {
+            new_obj.epollfd = epollfd;
+
+            // set up eventfd for CAN RX pipe
+            let rx_fd = libc::eventfd(0, 0);
+            log::debug!("rx_fd={}", rx_fd);
+            if rx_fd < 0 {
                 // TODO: handle error
             }
-            EVENT_FD_HOLDER.lock().unwrap().fd = eventfd;
-            fd_to_event_type.insert(eventfd, EventType::MessageReceived);
+            new_obj.rx_fd = rx_fd;
+            new_obj.add_event_type(rx_fd, EventType::MessageRx);
 
-            can_init();
+            EVENT_FD_HOLDER.lock().unwrap().fd = rx_fd;
+
+            // set up eventfd for CAN TX pipe
+            let tx_fd = libc::eventfd(0, 0);
+            log::debug!("tx_fd={}", tx_fd);
+            if tx_fd < 0 {
+                // TODO: handle error
+            }
+            new_obj.tx_fd = tx_fd;
+            new_obj.add_event_type(tx_fd, EventType::MessageTx);
+
+            // OK the CAN interface is ready to be initialized
             can_set_rx_message_consumer(Some(notify_message));
+            can_init();
         }
-        return Self {
-            epollfd: epollfd,
-            eventfd: eventfd,
-            fd_to_event_type: fd_to_event_type,
-        };
+        return new_obj;
     }
 
-    pub fn notify(&self, event_type: char) {
+    pub fn add_event_type(&mut self, fd: std::os::raw::c_int, event_type: EventType) {
         unsafe {
-            let event_type_p: *const char = &event_type;
-            let ptr: *const libc::c_void = std::mem::transmute(event_type_p);
-            libc::write(self.eventfd, ptr, 1);
+            let mut ev = libc::epoll_event {
+                events: libc::EPOLLIN as u32,
+                u64: fd as u64,
+            };
+            if libc::epoll_ctl(self.epollfd, libc::EPOLL_CTL_ADD, fd, &mut ev) < 0 {
+                // TODO: handle error
+            }
         }
+        self.fd_to_event_type.insert(fd, event_type);
+    }
+
+    pub fn remove_event_type(&mut self, fd: std::os::raw::c_int) {
+        unsafe {
+            let mut ev = libc::epoll_event {
+                events: 0,
+                u64: fd as u64,
+            };
+            if libc::epoll_ctl(self.epollfd, libc::EPOLL_CTL_DEL, fd, &mut ev) < 0 {
+                // TODO: handle error
+            }
+        }
+        self.fd_to_event_type.remove(&fd);
     }
 
     pub fn wait_for_event(&self) -> &EventType {
@@ -181,29 +211,10 @@ impl Boundary {
     }
 
     pub fn get_message(&self) -> Option<CanMessage> {
-        // return QUEUE.lock().unwrap().remove();
-        unsafe {
-            let mut data = 0;
-            let result = libc::eventfd_read(self.eventfd, &mut data);
-            if result < 0 {
-                let errno = *libc::__errno_location();
-                if errno == libc::EAGAIN || errno == libc::EWOULDBLOCK {
-                    log::debug!("eagain");
-                    return None;
-                }
-                // TODO: handle error
-                log::error!("read eventfd failed, fd={}, errno={}", self.eventfd, errno);
-                return None;
-            }
-            let message: *mut can_message_t = std::mem::transmute(data);
-            log::debug!(
-                "notif received: data={:#x} message={:#x}",
-                data,
-                message as u64
-            );
-            // event_type = (data & 0xff) as u8 as char;
-            return Some(CanMessage::new(message));
-        }
+        return match self.get_message_from_pipe(self.rx_fd) {
+            Some(message) => Some(CanMessage::new(message)),
+            None => None,
+        };
     }
 
     pub fn create_message(&self) -> CanMessage {
@@ -213,10 +224,70 @@ impl Boundary {
         }
     }
 
-    pub fn send_message(&self, mut message: CanMessage) {
+    /// Put a message to the TX pipe.
+    ///
+    /// The CAN interface is not thread safe. We just put the message
+    /// into the TX pipe and let the main thread pick up and handle it
+    /// in the event loop.
+    ///
+    /// # Arguments
+    ///
+    /// - `&self` (`Boundary`) - Myself.
+    /// - `mut message` (`CanMessage`) - Message to send.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut message = boundary.create_message();
+    ///
+    /// // set message contents here
+    ///
+    /// boundary.put_message(message);
+    /// ```
+    pub fn put_message(&self, mut message: CanMessage) {
         unsafe {
-            can_send_message(message.message);
+            libc::eventfd_write(self.tx_fd, message.message as u64);
         }
+        // The CAN interface will take care of releasing the message.
+        // We disconnect the object from the Rust ecosystem here.
         message.detach();
+    }
+
+    /// Send a message in the TX pipe if any.
+    ///
+    /// This method is meant to be called in the main thread in the event loop.
+    ///
+    /// # Arguments
+    ///
+    /// - `&self` (`Boundary`) - Myself.
+    pub fn send_message(&self) {
+        match self.get_message_from_pipe(self.tx_fd) {
+            Some(message) => {
+                unsafe {
+                    log::debug!("Sending message, ID={:08x}", (*message).id);
+                    can_send_message(message);
+                };
+            }
+            None => {}
+        }
+    }
+
+    fn get_message_from_pipe(&self, fd: libc::c_int) -> Option<*mut can_message_t> {
+        unsafe {
+            let mut data = 0;
+            let result = libc::eventfd_read(fd, &mut data);
+            if result < 0 {
+                let errno = *libc::__errno_location();
+                if errno == libc::EAGAIN || errno == libc::EWOULDBLOCK {
+                    log::debug!("eagain");
+                    return None;
+                }
+                // TODO: handle error
+                log::error!("read eventfd failed, fd={}, errno={}", self.rx_fd, errno);
+                return None;
+            }
+            let message: *mut can_message_t = std::mem::transmute(data);
+            return Some(message);
+        }
     }
 }

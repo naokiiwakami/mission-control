@@ -1,6 +1,8 @@
 #[derive(Debug)]
 pub enum EventType {
     NoEvent,
-    MessageReceived,
+    MessageRx,
+    MessageTx,
+    UserConnection,
     UserInput,
 }

@@ -60,7 +60,7 @@ impl<'a> ModuleManager<'a> {
         out_message.set_data(3, ((remote_uid >> 8) & 0xff) as u8);
         out_message.set_data(4, (remote_uid & 0xff) as u8);
         out_message.set_data(5, module_id);
-        self.can_controller.send_message(out_message);
+        self.can_controller.put_message(out_message);
         log::info!(
             "Issued module id {:03x} for uid {:08x}",
             module_id,
