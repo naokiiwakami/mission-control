@@ -25,9 +25,11 @@ pub struct ModuleManager<'a> {
 
 impl<'a> ModuleManager<'a> {
     pub fn new(can_controller: &'a CanController) -> Self {
-        return Self {
+        let new_instance = Self {
             can_controller: can_controller,
         };
+        new_instance.sign_in();
+        return new_instance;
     }
 
     pub fn handle_message(&self, message: CanMessage) {
@@ -39,30 +41,41 @@ impl<'a> ModuleManager<'a> {
         if message.is_extended() {
             let opcode = message.get_data(0);
             match opcode {
-                a3::A3_ADMIN_REQUEST_ID => self.assign_module_id(message),
+                a3::A3_ADMIN_SIGN_IN => self.assign_module_id(message),
                 _ => log::warn!("Unknown request {:02x}", opcode),
             }
         }
     }
 
-    fn assign_module_id(&self, in_message: CanMessage) {
-        let module_id = 0x03u8;
-        let mut out_message = self.can_controller.create_message();
-        let remote_uid = in_message.id();
+    fn create_message(&self) -> CanMessage {
+        let mut message = self.can_controller.create_message();
+        message.set_id(a3::A3_ID_MISSION_CONTROL);
+        return message;
+    }
+
+    fn sign_in(&self) {
+        let mut out_message = self.create_message();
         out_message.set_id(a3::A3_ID_MISSION_CONTROL);
-        out_message.set_extended(false);
-        out_message.set_remote(false);
+        out_message.set_data_length(1);
+        out_message.set_data(0, a3::A3_MC_SIGN_IN);
+        self.can_controller.put_message(out_message);
+    }
+
+    fn assign_module_id(&self, in_message: CanMessage) {
+        let remote_module_id = 0x03u8;
+        let remote_uid = in_message.id();
+        let mut out_message = self.create_message();
         out_message.set_data_length(6);
         out_message.set_data(0, a3::A3_MC_ASSIGN_MODULE_ID);
         out_message.set_data(1, ((remote_uid >> 24) & 0xff) as u8);
         out_message.set_data(2, ((remote_uid >> 16) & 0xff) as u8);
         out_message.set_data(3, ((remote_uid >> 8) & 0xff) as u8);
         out_message.set_data(4, (remote_uid & 0xff) as u8);
-        out_message.set_data(5, module_id);
+        out_message.set_data(5, remote_module_id);
         self.can_controller.put_message(out_message);
         log::info!(
             "Issued module id {:03x} for uid {:08x}",
-            module_id,
+            remote_module_id,
             remote_uid
         );
     }

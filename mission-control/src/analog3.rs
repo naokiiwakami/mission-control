@@ -20,12 +20,18 @@ pub const A3_VOICE_MSG_PROGRAM_CHANGE: u8 = 0x0C;
 pub const A3_VOICE_MSG_CHANNEL_PRESSURE: u8 = 0x0D;
 pub const A3_VOICE_MSG_PITCH_BEND: u8 = 0x0E;
 
-/* Module administration messages */
-pub const A3_ADMIN_REQUEST_ID: u8 = 0x00;
+/* Module administration opcodes */
+pub const A3_ADMIN_SIGN_IN: u8 = 0x01;
+pub const A3_ADMIN_NOTIFY_ID: u8 = 0x02;
 
 /* Mission control opcodes */
-pub const A3_MC_REGISTRATION_CHECK_REPLY: u8 = 0x00;
-pub const A3_MC_ASSIGN_MODULE_ID: u8 = 0x01;
-pub const A3_MC_PING: u8 = 0x02;
+pub const A3_MC_SIGN_IN: u8 = 0x01;
+pub const A3_MC_ASSIGN_MODULE_ID: u8 = 0x02;
+pub const A3_MC_PING: u8 = 0x03;
+pub const A3_MC_GET_CONFIG_REQUEST: u8 = 0x04;
+
+/* Individual module opcodes */
+pub const A3_IM_PING_REPLY: u8 = 0x01;
+pub const A3_IM_GET_CONFIG_REPLY: u8 = 0x02;
 
 pub const A3_DATA_LENGTH: u8 = 8;

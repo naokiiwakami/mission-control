@@ -58,7 +58,7 @@ fn main() {
     log::info!("Analog3 mission control started");
     let mut boundary = Boundary::new();
     let can_controller = CanController::new(&mut boundary);
-    let message_handler = ModuleManager::new(&can_controller);
+    let module_manager = ModuleManager::new(&can_controller);
 
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
     boundary.add_event_type(listener.as_raw_fd(), EventType::UserConnection);
@@ -70,7 +70,7 @@ fn main() {
         match event_type {
             EventType::MessageRx => {
                 if let Some(message) = can_controller.get_message() {
-                    message_handler.handle_message(message);
+                    module_manager.handle_message(message);
                 }
             }
             EventType::MessageTx => can_controller.send_message(),
