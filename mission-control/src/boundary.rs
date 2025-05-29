@@ -113,55 +113,23 @@ pub extern "C" fn notify_message(message: *mut can_message_t) {
 
 pub struct Boundary {
     epollfd: libc::c_int,
-    rx_fd: libc::c_int,
-    tx_fd: libc::c_int,
 
     fd_to_event_type: HashMap<libc::c_int, EventType>,
 }
 
-// TODO: Make this singleton
 impl Boundary {
     pub fn new() -> Self {
-        let fd_to_event_type = HashMap::new();
-        let mut new_obj = Self {
-            epollfd: 0,
-            rx_fd: 0,
-            tx_fd: 0,
-            fd_to_event_type: fd_to_event_type,
-        };
         unsafe {
             // set up the epoll event listener
             let epollfd = libc::epoll_create1(0);
             if epollfd < 0 {
                 // TODO: handle error
             }
-            new_obj.epollfd = epollfd;
-
-            // set up eventfd for CAN RX pipe
-            let rx_fd = libc::eventfd(0, 0);
-            log::debug!("rx_fd={}", rx_fd);
-            if rx_fd < 0 {
-                // TODO: handle error
-            }
-            new_obj.rx_fd = rx_fd;
-            new_obj.add_event_type(rx_fd, EventType::MessageRx);
-
-            EVENT_FD_HOLDER.lock().unwrap().fd = rx_fd;
-
-            // set up eventfd for CAN TX pipe
-            let tx_fd = libc::eventfd(0, 0);
-            log::debug!("tx_fd={}", tx_fd);
-            if tx_fd < 0 {
-                // TODO: handle error
-            }
-            new_obj.tx_fd = tx_fd;
-            new_obj.add_event_type(tx_fd, EventType::MessageTx);
-
-            // OK the CAN interface is ready to be initialized
-            can_set_rx_message_consumer(Some(notify_message));
-            can_init();
+            return Self {
+                epollfd: epollfd,
+                fd_to_event_type: HashMap::new(),
+            };
         }
-        return new_obj;
     }
 
     pub fn add_event_type(&mut self, fd: std::os::raw::c_int, event_type: EventType) {
@@ -207,6 +175,44 @@ impl Boundary {
                     None => &EventType::NoEvent,
                 };
             }
+        }
+    }
+}
+
+pub struct CanController {
+    rx_fd: libc::c_int,
+    tx_fd: libc::c_int,
+}
+
+impl CanController {
+    pub fn new<'a>(boundary: &'a mut Boundary) -> Self {
+        unsafe {
+            // set up eventfd for CAN RX pipe
+            let rx_fd = libc::eventfd(0, 0);
+            log::debug!("rx_fd={}", rx_fd);
+            if rx_fd < 0 {
+                // TODO: handle error
+            }
+            boundary.add_event_type(rx_fd, EventType::MessageRx);
+
+            EVENT_FD_HOLDER.lock().unwrap().fd = rx_fd;
+
+            // set up eventfd for CAN TX pipe
+            let tx_fd = libc::eventfd(0, 0);
+            log::debug!("tx_fd={}", tx_fd);
+            if tx_fd < 0 {
+                // TODO: handle error
+            }
+            boundary.add_event_type(tx_fd, EventType::MessageTx);
+
+            // OK the CAN interface is ready to be initialized
+            can_set_rx_message_consumer(Some(notify_message));
+            can_init();
+
+            return Self {
+                rx_fd: rx_fd,
+                tx_fd: tx_fd,
+            };
         }
     }
 
