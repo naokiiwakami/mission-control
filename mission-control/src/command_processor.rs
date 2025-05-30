@@ -3,6 +3,7 @@ use crate::module_manager::{ErrorType, ModuleManagementError};
 use dashmap::DashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::num::ParseIntError;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
@@ -29,158 +30,158 @@ pub struct Response {
     pub reply: Option<String>,
 }
 
-fn handle_result_inner(
-    stream: &mut TcpStream,
-    result_receiver: &Receiver<CommandResult>,
-    command_result: CommandResult,
-    continue_on_empty_reply: bool,
-) -> std::io::Result<()> {
-    match command_result {
-        Ok(reply_or_none) => match reply_or_none {
-            Some(reply) => stream.write_all(reply.as_bytes())?,
-            None => {
-                if continue_on_empty_reply {
-                    // the reply will come later
-                    handle_result(stream, result_receiver, false)?;
-                }
-            }
-        },
-        Err(e) => match e.error_type {
-            ErrorType::UserCommandUnknown => stream.write_all(e.message.as_bytes())?,
-            _ => {
-                log::error!("Command execution error: {e:?}");
-                stream.write_all(b"An internal error encountered. Check the log.\r\n")?;
-            }
-        },
-    };
-    return Ok(());
-}
-
-fn handle_result(
-    stream: &mut TcpStream,
-    result_receiver: &Receiver<CommandResult>,
-    continue_on_empty_reply: bool,
-) -> std::io::Result<()> {
-    let recv_result = result_receiver.recv_timeout(Duration::from_secs(10));
-    return match recv_result {
-        Ok(command_result) => handle_result_inner(
-            stream,
-            result_receiver,
-            command_result,
-            continue_on_empty_reply,
-        ),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            stream.write_all(b" timeout\r\n")?;
-            return Ok(());
-        }
-        Err(e) => {
-            log::error!("Command execution error: {e:?}");
-            stream.write_all(b"\r\nINTERNAL ERROR!\r\n")?;
-            return Ok(());
-        }
-    };
-}
-
-fn handle_command(
-    request: Request,
-    stream: &mut TcpStream,
-    notifier: &Sender<EventType>,
-    request_sender: &Sender<Request>,
-    result_receiver: &Receiver<CommandResult>,
-    continue_on_empty_reply: bool,
-) -> std::io::Result<()> {
-    request_sender.send(request).unwrap();
-    notifier.send(EventType::RequestSent).unwrap();
-    return handle_result(stream, result_receiver, continue_on_empty_reply);
-}
-
-fn handle_client(
-    id: u32,
-    mut stream: TcpStream,
+struct ClientHandler {
+    client_id: u32,
+    stream: TcpStream,
     notifier: Sender<EventType>,
     request_sender: Sender<Request>,
     result_receiver: Receiver<CommandResult>,
-) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    stream.write_all(b"welcome to analog3 mission control\r\n")?;
+}
 
-    loop {
-        stream.write_all(b"analog3> ")?;
-        let mut line = String::new();
-        match reader.read_line(&mut line)? {
-            0 => {
-                log::debug!("Connection closed");
-                return Ok(());
-            }
-            _ => {
-                let trimmed = line.trim().to_string();
-                log::debug!("Received: {}", trimmed);
-                let mut tokens = trimmed.split(" ");
-                let first_item = tokens.next();
-                if first_item == None {
-                    // do nothing
-                    continue;
+impl ClientHandler {
+    pub fn run(&mut self) -> std::io::Result<()> {
+        let mut reader = BufReader::new(self.stream.try_clone()?);
+        self.stream
+            .write_all(b"welcome to analog3 mission control\r\n")?;
+
+        loop {
+            self.stream.write_all(b"analog3> ")?;
+            let mut line = String::new();
+            match reader.read_line(&mut line)? {
+                0 => {
+                    log::debug!("Connection closed");
+                    return Ok(());
                 }
-                let command = first_item.unwrap();
-                match command {
-                    "hello" => {
-                        stream.write_all(b"hi\r\n")?;
-                    }
-                    "ping" => {
-                        let module_id = 0x02u8;
-                        let request = Request {
-                            client_id: id,
-                            command: trimmed,
-                            params: vec![Param::U8(module_id)],
-                        };
-                        handle_command(
-                            request,
-                            &mut stream,
-                            &notifier,
-                            &request_sender,
-                            &result_receiver,
-                            false,
-                        )?;
-                        stream.write_all(format!("sent to ID 0x{module_id:02x} ...").as_bytes())?;
-                        handle_result(&mut stream, &result_receiver, false)?;
-                    }
-                    "quit" => {
-                        stream.write_all(b"bye!\r\n")?;
-                        return Ok(());
-                    }
-                    "" => {
+                _ => {
+                    let trimmed = line.trim().to_string();
+                    log::debug!("Received: {}", trimmed);
+                    let tokens: Vec<String> = trimmed.split(" ").map(str::to_string).collect();
+                    if tokens.is_empty() {
                         // do nothing
+                        continue;
                     }
-                    _ => {
-                        let request = Request {
-                            client_id: id,
-                            command: trimmed,
-                            params: vec![],
-                        };
-                        handle_command(
-                            request,
-                            &mut stream,
-                            &notifier,
-                            &request_sender,
-                            &result_receiver,
-                            true,
-                        )?;
+                    let command = tokens[0].trim();
+                    match command {
+                        "hello" => {
+                            self.stream.write_all(b"hi\r\n")?;
+                        }
+                        "ping" => {
+                            self.ping(&command, &tokens)?;
+                        }
+                        "quit" => {
+                            self.stream.write_all(b"bye!\r\n")?;
+                            return Ok(());
+                        }
+                        "" => {
+                            // do nothing
+                        }
+                        _ => {
+                            let request = Request {
+                                client_id: self.client_id,
+                                command: trimmed,
+                                params: vec![],
+                            };
+                            self.handle_command(request, true)?;
+                        }
                     }
                 }
             }
         }
     }
+
+    fn parse_u8(&self, src: &str) -> Result<u8, ParseIntError> {
+        if src.starts_with("0x") {
+            return u8::from_str_radix(src.trim_start_matches("0x"), 16);
+        }
+        return u8::from_str_radix(src, 10);
+    }
+
+    fn ping(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        if tokens.len() < 2 {
+            self.stream.write_all(b"Usage: ping <id>\r\n")?;
+            return Ok(());
+        }
+        let parse_result = self.parse_u8(&tokens[1]);
+        if let Err(_) = parse_result {
+            self.stream.write_all(b"Invalid module id\r\n")?;
+            return Ok(());
+        }
+        let module_id: u8 = parse_result.unwrap();
+        let request = Request {
+            client_id: self.client_id,
+            command: command.to_string(),
+            params: vec![Param::U8(module_id)],
+        };
+        self.handle_command(request, false)?;
+        self.stream
+            .write_all(format!("sent to ID 0x{module_id:02x} ...").as_bytes())?;
+        self.handle_result(false)?;
+        return Ok(());
+    }
+
+    fn handle_command(
+        &mut self,
+        request: Request,
+        continue_on_empty_reply: bool,
+    ) -> std::io::Result<()> {
+        self.request_sender.send(request).unwrap();
+        self.notifier.send(EventType::RequestSent).unwrap();
+        return self.handle_result(continue_on_empty_reply);
+    }
+
+    fn handle_result(&mut self, continue_on_empty_reply: bool) -> std::io::Result<()> {
+        let recv_result = self.result_receiver.recv_timeout(Duration::from_secs(10));
+        return match recv_result {
+            Ok(command_result) => self.handle_result_inner(command_result, continue_on_empty_reply),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                self.stream.write_all(b" timeout\r\n")?;
+                return Ok(());
+            }
+            Err(e) => {
+                log::error!("Command execution error: {e:?}");
+                self.stream.write_all(b"\r\nINTERNAL ERROR!\r\n")?;
+                return Ok(());
+            }
+        };
+    }
+
+    fn handle_result_inner(
+        &mut self,
+        command_result: CommandResult,
+        continue_on_empty_reply: bool,
+    ) -> std::io::Result<()> {
+        match command_result {
+            Ok(reply_or_none) => match reply_or_none {
+                Some(reply) => self.stream.write_all(reply.as_bytes())?,
+                None => {
+                    if continue_on_empty_reply {
+                        // the reply will come later
+                        self.handle_result(false)?;
+                    }
+                }
+            },
+            Err(e) => match e.error_type {
+                ErrorType::UserCommandUnknown => self.stream.write_all(e.message.as_bytes())?,
+                _ => {
+                    log::error!("Command execution error: {e:?}");
+                    self.stream
+                        .write_all(b"An internal error encountered. Check the log.\r\n")?;
+                }
+            },
+        };
+        return Ok(());
+    }
 }
 
 pub fn start_command_processor(
     request_sender: Sender<Request>,
-    reply_senders: &Arc<DashMap<u32, Sender<CommandResult>>>,
+    result_senders: &Arc<DashMap<u32, Sender<CommandResult>>>,
     notifier: Sender<EventType>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap(); // TODO: Handle error more gracefully
     log::info!("Listening on port 7878");
 
-    let clone_senders = Arc::clone(&reply_senders);
+    let clone_result_senders = Arc::clone(&result_senders);
     thread::spawn(move || {
         let mut next_client_id = 0;
         loop {
@@ -190,20 +191,21 @@ pub fn start_command_processor(
                 Ok((stream, _)) => {
                     let notifier_clone = notifier.clone();
                     let request_sender_clone = request_sender.clone();
-                    let (reply_sender, response_receiver) = channel();
-                    clone_senders.insert(client_id, reply_sender);
-                    let clone_clone_senders = Arc::clone(&clone_senders);
+                    let (result_sender, result_receiver) = channel();
+                    clone_result_senders.insert(client_id, result_sender);
+                    let clone_clone_result_senders = Arc::clone(&clone_result_senders);
                     thread::spawn(move || {
-                        if let Err(e) = handle_client(
-                            client_id,
-                            stream,
-                            notifier_clone,
-                            request_sender_clone,
-                            response_receiver,
-                        ) {
+                        let mut client_handler = ClientHandler {
+                            client_id: client_id,
+                            stream: stream,
+                            notifier: notifier_clone,
+                            request_sender: request_sender_clone,
+                            result_receiver,
+                        };
+                        if let Err(e) = client_handler.run() {
                             log::error!("Channel error: {e:?}");
                         }
-                        clone_clone_senders.remove(&client_id);
+                        clone_clone_result_senders.remove(&client_id);
                     });
                 }
                 Err(e) => log::error!("couldn't get client: {e:?}"),
