@@ -2,6 +2,7 @@
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 use std::collections::HashMap;
+use std::sync::mpsc::Sender;
 use std::sync::{LazyLock, Mutex};
 
 use crate::event_type::EventType;
@@ -97,28 +98,45 @@ unsafe impl Send for CanMessage {}
 
 struct FdHolder {
     fd: libc::c_int,
+    sender: Option<Sender<EventType>>,
 }
 
-static EVENT_FD_HOLDER: LazyLock<Mutex<FdHolder>> =
-    LazyLock::new(|| Mutex::new(FdHolder { fd: 0 }));
+static EVENT_FD_HOLDER: LazyLock<Mutex<FdHolder>> = LazyLock::new(|| {
+    Mutex::new(FdHolder {
+        fd: 0,
+        sender: None,
+    })
+});
 
 #[unsafe(no_mangle)]
 pub extern "C" fn notify_message(message: *mut can_message_t) {
     log::debug!("message received: {:#x}", message as u64);
     let holder = EVENT_FD_HOLDER.lock().unwrap();
     unsafe {
-        libc::eventfd_write(holder.fd, message as u64);
+        match &holder.sender {
+            Some(sender) => {
+                if holder.fd > 0 {
+                    libc::eventfd_write(holder.fd, message as u64);
+                }
+                match sender.send(EventType::MessageRx) {
+                    Ok(..) => {}
+                    Err(error) => log::error!("Notif error: {error:?}"),
+                }
+            }
+            None => {}
+        }
     }
 }
 
 pub struct Boundary {
     epollfd: libc::c_int,
-
     fd_to_event_type: HashMap<libc::c_int, EventType>,
 }
 
 impl Boundary {
-    pub fn new() -> Self {
+    pub fn new(sender: Sender<EventType>) -> Self {
+        let mut holder = EVENT_FD_HOLDER.lock().unwrap();
+        holder.sender = Some(sender);
         unsafe {
             // set up the epoll event listener
             let epollfd = libc::epoll_create1(0);
@@ -157,35 +175,16 @@ impl Boundary {
         }
         self.fd_to_event_type.remove(&fd);
     }
-
-    pub fn wait_for_event(&self) -> &EventType {
-        unsafe {
-            let max_events: libc::c_int = 1; // concurrent dispatch not needed (yet)
-            let mut events = libc::epoll_event { events: 0, u64: 0 };
-            loop {
-                // TODO: get out of this intermittently to check shutdown status
-                let nfs = libc::epoll_wait(self.epollfd, &mut events, max_events, -1);
-                if nfs < 0 {
-                    // TODO: handle error
-                    log::error!("epoll error!");
-                }
-                let fd = (events.u64 & 0xffffffff) as libc::c_int;
-                return match self.fd_to_event_type.get(&fd) {
-                    Some(event_type) => event_type,
-                    None => &EventType::NoEvent,
-                };
-            }
-        }
-    }
 }
 
 pub struct CanController {
     rx_fd: libc::c_int,
     tx_fd: libc::c_int,
+    tx_notif: Sender<EventType>,
 }
 
 impl CanController {
-    pub fn new<'a>(boundary: &'a mut Boundary) -> Self {
+    pub fn new<'a>(boundary: &'a mut Boundary, tx_notif: Sender<EventType>) -> Self {
         unsafe {
             // set up eventfd for CAN RX pipe
             let rx_fd = libc::eventfd(0, 0);
@@ -212,6 +211,7 @@ impl CanController {
             return Self {
                 rx_fd: rx_fd,
                 tx_fd: tx_fd,
+                tx_notif: tx_notif,
             };
         }
     }
@@ -257,6 +257,10 @@ impl CanController {
         // The CAN interface will take care of releasing the message.
         // We disconnect the object from the Rust ecosystem here.
         message.detach();
+        match self.tx_notif.send(EventType::MessageTx) {
+            Ok(_) => {}
+            Err(e) => log::error!("Failed to send MessageTx notif: {e:?}"),
+        }
     }
 
     /// Send a message in the TX pipe if any.

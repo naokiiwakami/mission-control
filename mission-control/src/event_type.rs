@@ -4,5 +4,5 @@ pub enum EventType {
     MessageRx,
     MessageTx,
     UserConnection,
-    UserInput,
+    RequestSent,
 }
