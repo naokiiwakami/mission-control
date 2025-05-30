@@ -3,7 +3,6 @@ pub mod can_controller;
 pub mod command_processor;
 pub mod event_type;
 pub mod module_manager;
-pub mod user_request;
 
 use dashmap::DashMap;
 use env_logger::Env;
@@ -11,10 +10,9 @@ use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 
 use crate::can_controller::CanController;
-use crate::command_processor::start_command_processor;
+use crate::command_processor::{CommandResult, Request, start_command_processor};
 use crate::event_type::EventType;
-use crate::module_manager::ModuleManager;
-use crate::user_request::Request;
+use crate::module_manager::{ErrorType, ModuleManager};
 
 fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
@@ -24,11 +22,11 @@ fn main() {
     let mut module_manager = ModuleManager::new(&can_controller);
 
     let (request_sender, request_receiver) = channel::<Request>();
-    let reply_senders: Arc<DashMap<u32, Sender<String>>> = Arc::new(DashMap::new());
+    let result_senders: Arc<DashMap<u32, Sender<CommandResult>>> = Arc::new(DashMap::new());
 
     start_command_processor(
         request_sender.clone(),
-        &reply_senders,
+        &result_senders,
         event_notifier.clone(),
     );
 
@@ -38,21 +36,46 @@ fn main() {
         match event_type {
             EventType::MessageRx => {
                 if let Some(message) = can_controller.get_message() {
-                    if let Some((reply, client_id)) = module_manager.handle_message(message) {
-                        if let Some(sender) = reply_senders.get(&client_id) {
-                            sender.send(reply).unwrap();
+                    match module_manager.handle_message(message) {
+                        Ok(result_or_none) => {
+                            if let Some(result) = result_or_none {
+                                match result {
+                                    Ok(response) => {
+                                        if let Some(result_sender) =
+                                            result_senders.get(&response.client_id)
+                                        {
+                                            result_sender.send(Ok(response.reply)).unwrap();
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::error!("Can message handling error; {e}");
+                                    }
+                                }
+                            }
                         }
+                        Err(e) => match e.error_type {
+                            ErrorType::A3OpCodeUnknown => {
+                                log::warn!("Can message handling failed; {e}");
+                            }
+                            _ => {
+                                log::error!("Can message handling error; {e}");
+                            }
+                        },
                     }
                 }
             }
             EventType::MessageTx => can_controller.send_message(),
             EventType::RequestSent => {
                 let request: Request = request_receiver.recv().unwrap();
-                if let Some(sender) = reply_senders.get(&request.id) {
-                    if let Some((reply, _)) =
-                        module_manager.user_request(&request.command, request.id)
-                    {
-                        sender.send(reply).unwrap();
+                match result_senders.get(&request.client_id) {
+                    Some(response_sender) => {
+                        match module_manager.user_request(&request.command, request.client_id) {
+                            Ok(response) => response_sender.send(Ok(response.reply)).unwrap(),
+                            Err(e) => response_sender.send(Err(e)).unwrap(),
+                        }
+                    }
+                    None => {
+                        log::error!("RequestSent: unknown client_id: {}", request.client_id);
                     }
                 }
             }

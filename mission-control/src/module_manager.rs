@@ -1,21 +1,47 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::fmt::Write;
 
 use crate::analog3 as a3;
 use crate::can_controller::{CanController, CanMessage};
+use crate::command_processor::Response;
 
-#[derive(Clone)]
-struct Module {
-    id: u8,
-    uid: u32,
+#[derive(Debug, Clone)]
+pub enum ErrorType {
+    A3OpCodeUnknown,
+    A3OpCodeMissing,
+    UserCommandUnknown,
+    UserCommandStreamIdMissing,
 }
+
+#[derive(Debug, Clone)]
+pub struct ModuleManagementError {
+    pub error_type: ErrorType,
+    pub message: String,
+}
+
+impl fmt::Display for ModuleManagementError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}; {}", self.error_type, self.message)
+    }
+}
+
+impl std::error::Error for ModuleManagementError {}
+
+type Result<T> = std::result::Result<T, ModuleManagementError>;
 
 pub struct ModuleManager<'a> {
     can_controller: &'a CanController,
     modules_by_id: HashMap<u8, Module>,
     modules_by_uid: HashMap<u32, Module>,
     next_stream_id: u8,
-    stream_id_to_client_id: HashMap<u8, u32>,
+    streams: HashMap<u8, u32>,
+}
+
+#[derive(Debug, Clone)]
+struct Module {
+    id: u8,
+    uid: u32,
 }
 
 impl<'a> ModuleManager<'a> {
@@ -25,17 +51,19 @@ impl<'a> ModuleManager<'a> {
             modules_by_uid: HashMap::new(),
             modules_by_id: HashMap::new(),
             next_stream_id: 0,
-            stream_id_to_client_id: HashMap::new(),
+            streams: HashMap::new(),
         };
         new_instance.sign_in();
         return new_instance;
     }
 
-    pub fn handle_message(&mut self, message: CanMessage) -> Option<(String, u32)> {
+    pub fn handle_message(&mut self, message: CanMessage) -> Result<Option<Result<Response>>> {
         log::debug!("Message received: id={:08x}", message.id());
         if message.data_length() == 0 {
-            // TODO: What should we do in this case?
-            return None;
+            return Err(ModuleManagementError {
+                error_type: ErrorType::A3OpCodeMissing,
+                message: "".to_string(),
+            });
         }
         let opcode = message.get_data(0);
         if message.is_extended() {
@@ -43,16 +71,20 @@ impl<'a> ModuleManager<'a> {
                 a3::A3_ADMIN_SIGN_IN => self.assign_module_id(message),
                 a3::A3_ADMIN_NOTIFY_ID => self.register_module(message),
                 _ => {
-                    log::warn!("Unknown request {:02x}", opcode);
-                    return None;
+                    return Err(ModuleManagementError {
+                        error_type: ErrorType::A3OpCodeUnknown,
+                        message: format!("{opcode:02x}"),
+                    });
                 }
             };
         }
         return match opcode {
             a3::A3_IM_PING_REPLY => self.ping_reply(message),
             _ => {
-                log::warn!("Unknown request {:02x}", opcode);
-                return None;
+                return Err(ModuleManagementError {
+                    error_type: ErrorType::A3OpCodeUnknown,
+                    message: format!("{opcode:02x}"),
+                });
             }
         };
     }
@@ -80,7 +112,7 @@ impl<'a> ModuleManager<'a> {
         return 0;
     }
 
-    fn assign_module_id(&mut self, in_message: CanMessage) -> Option<(String, u32)> {
+    fn assign_module_id(&mut self, in_message: CanMessage) -> Result<Option<Result<Response>>> {
         let remote_uid = in_message.id();
         let remote_id = match self.modules_by_uid.get(&remote_uid) {
             Some(module) => module.id,
@@ -106,10 +138,10 @@ impl<'a> ModuleManager<'a> {
             remote_id,
             remote_uid
         );
-        return None;
+        return Ok(None);
     }
 
-    fn register_module(&mut self, in_message: CanMessage) -> Option<(String, u32)> {
+    fn register_module(&mut self, in_message: CanMessage) -> Result<Option<Result<Response>>> {
         let remote_uid = in_message.id();
         let remote_id = in_message.get_data(1);
         log::debug!("Module recognized; id {remote_id:03x} for uid {remote_uid:08x}");
@@ -119,44 +151,57 @@ impl<'a> ModuleManager<'a> {
         };
         self.modules_by_id.insert(module.id, module.clone());
         self.modules_by_uid.insert(module.uid, module);
-        return None;
+        return Ok(None);
     }
 
-    fn ping_reply(&mut self, in_message: CanMessage) -> Option<(String, u32)> {
+    fn ping_reply(&mut self, in_message: CanMessage) -> Result<Option<Result<Response>>> {
         let remote_id = in_message.id();
         let stream_id = in_message.get_data(1);
         log::debug!("Ping reply received; id {remote_id:03x}");
-        if let Some(client_id) = self.stream_id_to_client_id.remove(&stream_id) {
-            return Some(("ok\r\n".to_string(), client_id));
+        match self.streams.remove(&stream_id) {
+            Some(client_id) => Ok(Some(Ok(Response {
+                client_id: client_id,
+                reply: Some("ok\r\n".to_string()),
+            }))),
+            None => Err(ModuleManagementError {
+                error_type: ErrorType::UserCommandStreamIdMissing,
+                message: format!("stream_id: {stream_id}"),
+            }),
         }
-        return None;
     }
 
-    pub fn user_request(&mut self, command: &String, client_id: u32) -> Option<(String, u32)> {
+    pub fn user_request(&mut self, command: &String, client_id: u32) -> Result<Response> {
         match command.as_str() {
             "list" => {
                 let mut out = String::new();
                 for (id, module) in &self.modules_by_id {
                     write!(out, "{:02x}: {:08x}\r\n", id, module.uid).unwrap();
                 }
-                return Some((out, client_id));
+                Ok(Response {
+                    client_id: client_id,
+                    reply: Some(out),
+                })
             }
             "ping" => {
                 let remote_id = 1u8; // PoC yet
                 let stream_id = self.next_stream_id;
                 self.next_stream_id += 1;
-                self.stream_id_to_client_id.insert(stream_id, client_id);
+                self.streams.insert(stream_id, client_id);
                 let mut out_message = self.create_message();
                 out_message.set_data_length(3);
                 out_message.set_data(0, a3::A3_MC_PING);
                 out_message.set_data(1, remote_id);
                 out_message.set_data(2, stream_id);
                 self.can_controller.put_message(out_message);
-                return None;
+                Ok(Response {
+                    client_id: client_id,
+                    reply: None,
+                })
             }
-            _ => {
-                return Some((format!("Unknown command: {command}\r\n"), client_id));
-            }
+            _ => Err(ModuleManagementError {
+                error_type: ErrorType::UserCommandUnknown,
+                message: format!("Unknown command: {command}\r\n"),
+            }),
         }
     }
 }
