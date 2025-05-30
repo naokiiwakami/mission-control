@@ -1,135 +1,59 @@
 pub mod analog3;
 pub mod can_controller;
+pub mod command_processor;
 pub mod event_type;
 pub mod module_manager;
+pub mod user_request;
 
 use dashmap::DashMap;
 use env_logger::Env;
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::thread;
+use std::sync::mpsc::{Sender, channel};
 
 use crate::can_controller::CanController;
+use crate::command_processor::start_command_processor;
 use crate::event_type::EventType;
 use crate::module_manager::ModuleManager;
-
-struct Request {
-    id: u32,
-    command: String,
-}
-
-fn handle_client(
-    id: u32,
-    mut stream: TcpStream,
-    notifier: Sender<EventType>,
-    request_sender: Sender<Request>,
-    reply_receiver: Receiver<String>,
-) {
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    stream
-        .write_all(b"welcome to analog3 mission control\r\n")
-        .unwrap();
-
-    loop {
-        stream.write_all(b"a3> ").unwrap();
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                log::debug!("Connection closed");
-                break;
-            }
-            Ok(_) => {
-                let trimmed = line.trim().to_string();
-                log::debug!("Received: {}", trimmed);
-                match trimmed.as_str() {
-                    "hello" => {
-                        stream.write_all(b"hi\r\n").unwrap();
-                    }
-                    "ping" => {
-                        let request = Request {
-                            id: id,
-                            command: "ping".to_string(),
-                        };
-                        request_sender.send(request).unwrap();
-                        notifier.send(EventType::RequestSent).unwrap();
-                        let reply = reply_receiver.recv().unwrap();
-                        stream.write_all(reply.as_bytes()).unwrap();
-                    }
-                    "quit" => {
-                        stream.write_all(b"bye!\r\n").unwrap();
-                        break;
-                    }
-                    _ => {
-                        stream.write_all(b"command not recognized\r\n").unwrap();
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to read from socket: {e:?}");
-                break;
-            }
-        }
-    }
-}
+use crate::user_request::Request;
 
 fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
     log::info!("Analog3 mission control started");
-    let (notifier, receiver) = std::sync::mpsc::channel();
-    let can_controller = CanController::new(notifier.clone());
-    let module_manager = ModuleManager::new(&can_controller);
-
-    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
-    log::info!("Listening on port 7878");
+    let (event_notifier, event_notif_receiver) = std::sync::mpsc::channel();
+    let can_controller = CanController::new(event_notifier.clone());
+    let mut module_manager = ModuleManager::new(&can_controller);
 
     let (request_sender, request_receiver) = channel::<Request>();
     let reply_senders: Arc<DashMap<u32, Sender<String>>> = Arc::new(DashMap::new());
-    let clone_senders = Arc::clone(&reply_senders);
-    thread::spawn(move || {
-        loop {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    let notifier_clone = notifier.clone();
-                    let request_sender_clone = request_sender.clone();
-                    let (reply_sender, reply_receiver) = channel();
-                    clone_senders.insert(0, reply_sender);
-                    let clone_clone_senders = Arc::clone(&clone_senders);
-                    thread::spawn(move || {
-                        handle_client(
-                            0,
-                            stream,
-                            notifier_clone,
-                            request_sender_clone,
-                            reply_receiver,
-                        );
-                        clone_clone_senders.remove(&0);
-                    });
-                }
-                Err(e) => log::error!("couldn't get client: {e:?}"),
-            }
-        }
-    });
+
+    start_command_processor(
+        request_sender.clone(),
+        &reply_senders,
+        event_notifier.clone(),
+    );
 
     // The event loop
     loop {
-        let event_type = receiver.recv().unwrap();
+        let event_type = event_notif_receiver.recv().unwrap();
         match event_type {
             EventType::MessageRx => {
                 if let Some(message) = can_controller.get_message() {
-                    module_manager.handle_message(message);
+                    if let Some((reply, client_id)) = module_manager.handle_message(message) {
+                        if let Some(sender) = reply_senders.get(&client_id) {
+                            sender.send(reply).unwrap();
+                        }
+                    }
                 }
             }
             EventType::MessageTx => can_controller.send_message(),
             EventType::RequestSent => {
                 let request: Request = request_receiver.recv().unwrap();
-                match reply_senders.get(&request.id) {
-                    Some(sender) => {
-                        let reply: String = format!("{} received\r\n", request.command);
+                if let Some(sender) = reply_senders.get(&request.id) {
+                    if let Some((reply, _)) =
+                        module_manager.user_request(&request.command, request.id)
+                    {
                         sender.send(reply).unwrap();
                     }
-                    None => {}
                 }
             }
             _ => log::warn!("Unknown event: {:?}", event_type),
