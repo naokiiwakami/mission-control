@@ -35,6 +35,7 @@ fn main() {
         let event_type = event_notif_receiver.recv().unwrap();
         match event_type {
             EventType::MessageRx => {
+                // TODO: Do something to this deep nest
                 if let Some(message) = can_controller.get_message() {
                     match module_manager.handle_message(message) {
                         Ok(result_or_none) => {
@@ -68,12 +69,10 @@ fn main() {
             EventType::RequestSent => {
                 let request: Request = request_receiver.recv().unwrap();
                 match result_senders.get(&request.client_id) {
-                    Some(response_sender) => {
-                        match module_manager.user_request(&request.command, request.client_id) {
-                            Ok(response) => response_sender.send(Ok(response.reply)).unwrap(),
-                            Err(e) => response_sender.send(Err(e)).unwrap(),
-                        }
-                    }
+                    Some(response_sender) => match module_manager.user_request(&request) {
+                        Ok(response) => response_sender.send(Ok(response.reply)).unwrap(),
+                        Err(e) => response_sender.send(Err(e)).unwrap(),
+                    },
                     None => {
                         log::error!("RequestSent: unknown client_id: {}", request.client_id);
                     }

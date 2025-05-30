@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::analog3 as a3;
 use crate::can_controller::{CanController, CanMessage};
-use crate::command_processor::Response;
+use crate::command_processor::{Param, Request, Response};
 
 #[derive(Debug, Clone)]
 pub enum ErrorType {
@@ -12,6 +12,7 @@ pub enum ErrorType {
     A3OpCodeMissing,
     UserCommandUnknown,
     UserCommandStreamIdMissing,
+    UserCommandInvalidRequest,
 }
 
 #[derive(Debug, Clone)]
@@ -161,7 +162,7 @@ impl<'a> ModuleManager<'a> {
         match self.streams.remove(&stream_id) {
             Some(client_id) => Ok(Some(Ok(Response {
                 client_id: client_id,
-                reply: Some("ok\r\n".to_string()),
+                reply: Some(" replied\r\n".to_string()),
             }))),
             None => Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandStreamIdMissing,
@@ -170,8 +171,9 @@ impl<'a> ModuleManager<'a> {
         }
     }
 
-    pub fn user_request(&mut self, command: &String, client_id: u32) -> Result<Response> {
-        match command.as_str() {
+    pub fn user_request(&mut self, request: &Request) -> Result<Response> {
+        let client_id = request.client_id;
+        match request.command.as_str() {
             "list" => {
                 let mut out = String::new();
                 for (id, module) in &self.modules_by_id {
@@ -182,25 +184,30 @@ impl<'a> ModuleManager<'a> {
                     reply: Some(out),
                 })
             }
-            "ping" => {
-                let remote_id = 1u8; // PoC yet
-                let stream_id = self.next_stream_id;
-                self.next_stream_id += 1;
-                self.streams.insert(stream_id, client_id);
-                let mut out_message = self.create_message();
-                out_message.set_data_length(3);
-                out_message.set_data(0, a3::A3_MC_PING);
-                out_message.set_data(1, remote_id);
-                out_message.set_data(2, stream_id);
-                self.can_controller.put_message(out_message);
-                Ok(Response {
-                    client_id: client_id,
-                    reply: None,
-                })
-            }
+            "ping" => match request.params[0] {
+                Param::U8(remote_id) => {
+                    let stream_id = self.next_stream_id;
+                    self.next_stream_id += 1;
+                    self.streams.insert(stream_id, client_id);
+                    let mut out_message = self.create_message();
+                    out_message.set_data_length(3);
+                    out_message.set_data(0, a3::A3_MC_PING);
+                    out_message.set_data(1, remote_id);
+                    out_message.set_data(2, stream_id);
+                    self.can_controller.put_message(out_message);
+                    Ok(Response {
+                        client_id: client_id,
+                        reply: None,
+                    })
+                }
+                _ => Err(ModuleManagementError {
+                    error_type: ErrorType::UserCommandInvalidRequest,
+                    message: "The first parameter should be of type u8".to_string(),
+                }),
+            },
             _ => Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandUnknown,
-                message: format!("Unknown command: {command}\r\n"),
+                message: format!("Unknown command: {}\r\n", request.command),
             }),
         }
     }
