@@ -1,6 +1,6 @@
 // use crate::analog3::A3_ADMIN_REQUEST_ID;
 use crate::analog3 as a3;
-use crate::boundary::{CanController, CanMessage};
+use crate::can_controller::{CanController, CanMessage};
 
 /*
 // ID assignments /////////////////////////////////

@@ -1,5 +1,5 @@
 pub mod analog3;
-pub mod boundary;
+pub mod can_controller;
 pub mod event_type;
 pub mod module_manager;
 
@@ -11,10 +11,9 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
-use boundary::{Boundary, CanController};
-use module_manager::ModuleManager;
-
+use crate::can_controller::CanController;
 use crate::event_type::EventType;
+use crate::module_manager::ModuleManager;
 
 struct Request {
     id: u32,
@@ -79,8 +78,7 @@ fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
     log::info!("Analog3 mission control started");
     let (notifier, receiver) = std::sync::mpsc::channel();
-    let mut boundary = Boundary::new(notifier.clone());
-    let can_controller = CanController::new(&mut boundary, notifier.clone());
+    let can_controller = CanController::new(notifier.clone());
     let module_manager = ModuleManager::new(&can_controller);
 
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();

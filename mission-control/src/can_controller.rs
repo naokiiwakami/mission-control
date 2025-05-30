@@ -1,7 +1,6 @@
 #![allow(non_upper_case_globals, non_camel_case_types, non_snake_case)]
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::sync::{LazyLock, Mutex};
 
@@ -98,13 +97,13 @@ unsafe impl Send for CanMessage {}
 
 struct FdHolder {
     fd: libc::c_int,
-    sender: Option<Sender<EventType>>,
+    notifier: Option<Sender<EventType>>,
 }
 
 static EVENT_FD_HOLDER: LazyLock<Mutex<FdHolder>> = LazyLock::new(|| {
     Mutex::new(FdHolder {
         fd: 0,
-        sender: None,
+        notifier: None,
     })
 });
 
@@ -113,67 +112,14 @@ pub extern "C" fn notify_message(message: *mut can_message_t) {
     log::debug!("message received: {:#x}", message as u64);
     let holder = EVENT_FD_HOLDER.lock().unwrap();
     unsafe {
-        match &holder.sender {
-            Some(sender) => {
-                if holder.fd > 0 {
-                    libc::eventfd_write(holder.fd, message as u64);
-                }
-                match sender.send(EventType::MessageRx) {
-                    Ok(..) => {}
-                    Err(error) => log::error!("Notif error: {error:?}"),
-                }
+        if let Some(sender) = &holder.notifier {
+            if holder.fd > 0 {
+                libc::eventfd_write(holder.fd, message as u64);
             }
-            None => {}
-        }
-    }
-}
-
-pub struct Boundary {
-    epollfd: libc::c_int,
-    fd_to_event_type: HashMap<libc::c_int, EventType>,
-}
-
-impl Boundary {
-    pub fn new(sender: Sender<EventType>) -> Self {
-        let mut holder = EVENT_FD_HOLDER.lock().unwrap();
-        holder.sender = Some(sender);
-        unsafe {
-            // set up the epoll event listener
-            let epollfd = libc::epoll_create1(0);
-            if epollfd < 0 {
-                // TODO: handle error
-            }
-            return Self {
-                epollfd: epollfd,
-                fd_to_event_type: HashMap::new(),
-            };
-        }
-    }
-
-    pub fn add_event_type(&mut self, fd: std::os::raw::c_int, event_type: EventType) {
-        unsafe {
-            let mut ev = libc::epoll_event {
-                events: libc::EPOLLIN as u32,
-                u64: fd as u64,
-            };
-            if libc::epoll_ctl(self.epollfd, libc::EPOLL_CTL_ADD, fd, &mut ev) < 0 {
-                // TODO: handle error
+            if let Err(error) = sender.send(EventType::MessageRx) {
+                log::error!("Notif error: {error:?}");
             }
         }
-        self.fd_to_event_type.insert(fd, event_type);
-    }
-
-    pub fn remove_event_type(&mut self, fd: std::os::raw::c_int) {
-        unsafe {
-            let mut ev = libc::epoll_event {
-                events: 0,
-                u64: fd as u64,
-            };
-            if libc::epoll_ctl(self.epollfd, libc::EPOLL_CTL_DEL, fd, &mut ev) < 0 {
-                // TODO: handle error
-            }
-        }
-        self.fd_to_event_type.remove(&fd);
     }
 }
 
@@ -184,7 +130,7 @@ pub struct CanController {
 }
 
 impl CanController {
-    pub fn new<'a>(boundary: &'a mut Boundary, tx_notif: Sender<EventType>) -> Self {
+    pub fn new(notifier: Sender<EventType>) -> Self {
         unsafe {
             // set up eventfd for CAN RX pipe
             let rx_fd = libc::eventfd(0, 0);
@@ -192,9 +138,10 @@ impl CanController {
             if rx_fd < 0 {
                 // TODO: handle error
             }
-            boundary.add_event_type(rx_fd, EventType::MessageRx);
 
-            EVENT_FD_HOLDER.lock().unwrap().fd = rx_fd;
+            let mut holder = EVENT_FD_HOLDER.lock().unwrap();
+            holder.fd = rx_fd;
+            holder.notifier = Some(notifier.clone());
 
             // set up eventfd for CAN TX pipe
             let tx_fd = libc::eventfd(0, 0);
@@ -202,7 +149,6 @@ impl CanController {
             if tx_fd < 0 {
                 // TODO: handle error
             }
-            boundary.add_event_type(tx_fd, EventType::MessageTx);
 
             // OK the CAN interface is ready to be initialized
             can_set_rx_message_consumer(Some(notify_message));
@@ -211,7 +157,7 @@ impl CanController {
             return Self {
                 rx_fd: rx_fd,
                 tx_fd: tx_fd,
-                tx_notif: tx_notif,
+                tx_notif: notifier,
             };
         }
     }
