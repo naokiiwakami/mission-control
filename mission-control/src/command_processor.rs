@@ -1,6 +1,6 @@
 use crate::event_type::EventType;
 use crate::module_manager::{ErrorType, ModuleManagementError};
-use crate::operation::{Operation, Request, RequestParam};
+use crate::operation::{Operation, Request, RequestParam, Response};
 use dashmap::DashMap;
 // use std::fmt;
 // use std::fmt::Write;
@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::Duration;
 
-pub type CommandResult = Result<Option<String>, ModuleManagementError>;
+pub type OperationResult = Result<Response, ModuleManagementError>;
 
 struct ParseParamError {}
 
@@ -99,7 +99,7 @@ struct ClientHandler {
     stream: TcpStream,
     notifier: Sender<EventType>,
     request_sender: Sender<Request>,
-    result_receiver: Receiver<CommandResult>,
+    result_receiver: Receiver<OperationResult>,
 }
 
 impl ClientHandler {
@@ -259,7 +259,9 @@ impl ClientHandler {
     fn handle_result(&mut self, continue_on_empty_reply: bool) -> std::io::Result<()> {
         let recv_result = self.result_receiver.recv_timeout(Duration::from_secs(10));
         return match recv_result {
-            Ok(command_result) => self.handle_result_inner(command_result, continue_on_empty_reply),
+            Ok(operation_result) => {
+                self.handle_result_inner(operation_result, continue_on_empty_reply)
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 self.stream.write_all(b" timeout\r\n")?;
                 return Ok(());
@@ -274,12 +276,14 @@ impl ClientHandler {
 
     fn handle_result_inner(
         &mut self,
-        command_result: CommandResult,
+        operation_result: OperationResult,
         continue_on_empty_reply: bool,
     ) -> std::io::Result<()> {
-        match command_result {
-            Ok(reply_or_none) => match reply_or_none {
-                Some(reply) => self.stream.write_all(reply.as_bytes())?,
+        match operation_result {
+            Ok(response) => match response.reply {
+                Some(reply) => {
+                    self.stream.write_all(reply.as_bytes())?;
+                }
                 None => {
                     if continue_on_empty_reply {
                         // the reply will come later
@@ -302,7 +306,7 @@ impl ClientHandler {
 
 pub fn start_command_processor(
     request_sender: Sender<Request>,
-    result_senders: &Arc<DashMap<u32, Sender<CommandResult>>>,
+    result_senders: &Arc<DashMap<u32, Sender<OperationResult>>>,
     notifier: Sender<EventType>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap(); // TODO: Handle error more gracefully

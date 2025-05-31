@@ -6,7 +6,7 @@ pub mod module_manager;
 pub mod operation;
 
 use crate::can_controller::CanController;
-use crate::command_processor::{CommandResult, start_command_processor};
+use crate::command_processor::{OperationResult, start_command_processor};
 use crate::event_type::EventType;
 use crate::module_manager::{ErrorType, ModuleManager};
 use crate::operation::Request;
@@ -23,7 +23,7 @@ fn main() {
     let mut module_manager = ModuleManager::new(&can_controller).unwrap();
 
     let (request_sender, request_receiver) = channel::<Request>();
-    let result_senders: Arc<DashMap<u32, Sender<CommandResult>>> = Arc::new(DashMap::new());
+    let result_senders: Arc<DashMap<u32, Sender<OperationResult>>> = Arc::new(DashMap::new());
 
     start_command_processor(
         request_sender.clone(),
@@ -45,7 +45,7 @@ fn main() {
                                         if let Some(result_sender) =
                                             result_senders.get(&response.client_id)
                                         {
-                                            result_sender.send(Ok(response.reply)).unwrap();
+                                            result_sender.send(Ok(response)).unwrap();
                                         }
                                     }
                                     Err(e) => {
@@ -70,7 +70,7 @@ fn main() {
                 let request: Request = request_receiver.recv().unwrap();
                 match result_senders.get(&request.client_id) {
                     Some(response_sender) => match module_manager.user_request(&request) {
-                        Ok(response) => response_sender.send(Ok(response.reply)).unwrap(),
+                        Ok(response) => response_sender.send(Ok(response)).unwrap(),
                         Err(e) => response_sender.send(Err(e)).unwrap(),
                     },
                     None => {
