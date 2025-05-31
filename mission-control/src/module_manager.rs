@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use crate::analog3 as a3;
 use crate::can_controller::{CanController, CanMessage};
-use crate::command_processor::{Param, Request, Response};
+use crate::operation::{Operation, Request, RequestParam, Response};
 
 #[derive(Debug, Clone)]
 pub enum ErrorType {
@@ -228,12 +228,12 @@ impl<'a> ModuleManager<'a> {
     // User command handling /////////////////////////////////////////////////////
 
     pub fn user_request(&mut self, request: &Request) -> Result<Response> {
-        match request.command.as_str() {
-            "list" => self.process_list(request),
-            "ping" => self.process_ping(request),
-            "cancel-uid" => self.process_cancel_uid(request),
-            "pretend-sign-in" => self.process_pseudo_sign_in(request),
-            "pretend-notify-id" => self.process_pseudo_notify_id(request),
+        match request.operation {
+            Operation::List => self.process_list(request),
+            Operation::Ping => self.process_ping(request),
+            Operation::RequestUidCancel => self.process_cancel_uid_request(request),
+            Operation::PretendSignIn => self.process_pseudo_sign_in(request),
+            Operation::PretendNotifyId => self.process_pseudo_notify_id(request),
             _ => Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandUnknown,
                 message: format!("Unknown command: {}\r\n", request.command),
@@ -259,7 +259,7 @@ impl<'a> ModuleManager<'a> {
 
     fn process_ping(&mut self, request: &Request) -> Result<Response> {
         let client_id = request.client_id;
-        let Param::U8(remote_id) = request.params[0] else {
+        let RequestParam::U8(remote_id) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u8".to_string(),
@@ -278,9 +278,9 @@ impl<'a> ModuleManager<'a> {
         });
     }
 
-    fn process_cancel_uid(&mut self, request: &Request) -> Result<Response> {
+    fn process_cancel_uid_request(&mut self, request: &Request) -> Result<Response> {
         let client_id = request.client_id;
-        let Param::U32(remote_uid) = request.params[0] else {
+        let RequestParam::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u32".to_string(),
@@ -320,7 +320,7 @@ impl<'a> ModuleManager<'a> {
 
     fn process_pseudo_sign_in(&mut self, request: &Request) -> Result<Response> {
         let client_id = request.client_id;
-        let Param::U32(remote_uid) = request.params[0] else {
+        let RequestParam::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u32".to_string(),
@@ -335,13 +335,13 @@ impl<'a> ModuleManager<'a> {
 
     fn process_pseudo_notify_id(&mut self, request: &Request) -> Result<Response> {
         let client_id = request.client_id;
-        let Param::U32(remote_uid) = request.params[0] else {
+        let RequestParam::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u32".to_string(),
             });
         };
-        let Param::U8(remote_id) = request.params[1] else {
+        let RequestParam::U8(remote_id) = request.params[1] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The second parameter should be of type u8".to_string(),

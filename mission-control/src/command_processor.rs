@@ -1,6 +1,9 @@
 use crate::event_type::EventType;
 use crate::module_manager::{ErrorType, ModuleManagementError};
+use crate::operation::{Operation, Request, RequestParam};
 use dashmap::DashMap;
+// use std::fmt;
+// use std::fmt::Write;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::num::ParseIntError;
@@ -11,25 +14,84 @@ use std::time::Duration;
 
 pub type CommandResult = Result<Option<String>, ModuleManagementError>;
 
-#[derive(Debug)]
-pub enum Param {
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    Text(String),
+struct ParseParamError {}
+
+struct Spec {
+    name: String,
+    required: bool,
+    parse: fn(&String) -> Result<RequestParam, ParseParamError>,
 }
 
-#[derive(Debug)]
-pub struct Request {
-    pub client_id: u32,
-    pub command: String,
-    pub params: Vec<Param>,
-}
+impl Spec {
+    pub fn u8(name: &str, required: bool) -> Self {
+        Self {
+            name: name.to_string(),
+            required: required,
+            parse: |src| {
+                let parse_u8 = || {
+                    if src.starts_with("0x") {
+                        u8::from_str_radix(src.trim_start_matches("0x"), 16)
+                    } else {
+                        u8::from_str_radix(src, 10)
+                    }
+                };
+                return match parse_u8() {
+                    Ok(value) => Ok(RequestParam::U8(value)),
+                    Err(_) => Err(ParseParamError {}),
+                };
+            },
+        }
+    }
 
-#[derive(Debug)]
-pub struct Response {
-    pub client_id: u32,
-    pub reply: Option<String>,
+    #[allow(dead_code)]
+    pub fn u16(name: &str, required: bool) -> Self {
+        Self {
+            name: name.to_string(),
+            required: required,
+            parse: |src| {
+                let parse_16 = || {
+                    if src.starts_with("0x") {
+                        u16::from_str_radix(src.trim_start_matches("0x"), 16)
+                    } else {
+                        u16::from_str_radix(src, 10)
+                    }
+                };
+                return match parse_16() {
+                    Ok(value) => Ok(RequestParam::U16(value)),
+                    Err(_) => Err(ParseParamError {}),
+                };
+            },
+        }
+    }
+
+    pub fn u32(name: &str, required: bool) -> Self {
+        Self {
+            name: name.to_string(),
+            required: required,
+            parse: |src| {
+                let parse_16 = || {
+                    if src.starts_with("0x") {
+                        u32::from_str_radix(src.trim_start_matches("0x"), 16)
+                    } else {
+                        u32::from_str_radix(src, 10)
+                    }
+                };
+                return match parse_16() {
+                    Ok(value) => Ok(RequestParam::U32(value)),
+                    Err(_) => Err(ParseParamError {}),
+                };
+            },
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn str(name: String, required: bool) -> Self {
+        Self {
+            name: name,
+            required: required,
+            parse: |src| Ok(RequestParam::Text(src.to_string())),
+        }
+    }
 }
 
 struct ClientHandler {
@@ -67,18 +129,28 @@ impl ClientHandler {
                         "hello" => {
                             self.stream.write_all(b"hi\r\n")?;
                         }
-                        "ping" => {
-                            self.ping(&command, &tokens)?;
+                        "list" => {
+                            self.generic_command(&command, Operation::List, &tokens, &vec![])?
                         }
-                        "cancel-uid" => {
-                            self.cancel_uid(&command, &tokens)?;
-                        }
-                        "pretend-sign-in" => {
-                            self.pretend_sign_in(&command, &tokens)?;
-                        }
-                        "pretend-notify-id" => {
-                            self.pretend_notify_id(&command, &tokens)?;
-                        }
+                        "ping" => self.ping(&command, &tokens)?,
+                        "cancel-uid" => self.generic_command(
+                            &command,
+                            Operation::RequestUidCancel,
+                            &tokens,
+                            &vec![Spec::u32("uid", true)],
+                        )?,
+                        "pretend-sign-in" => self.generic_command(
+                            &command,
+                            Operation::PretendSignIn,
+                            &tokens,
+                            &vec![Spec::u32("uid", true)],
+                        )?,
+                        "pretend-notify-id" => self.generic_command(
+                            &command,
+                            Operation::PretendNotifyId,
+                            &tokens,
+                            &vec![Spec::u32("uid", true), Spec::u8("id", true)],
+                        )?,
                         "quit" => {
                             self.stream.write_all(b"bye!\r\n")?;
                             return Ok(());
@@ -87,12 +159,8 @@ impl ClientHandler {
                             // do nothing
                         }
                         _ => {
-                            let request = Request {
-                                client_id: self.client_id,
-                                command: trimmed,
-                                params: vec![],
-                            };
-                            self.handle_command(request, true)?;
+                            self.stream
+                                .write_all(format!("{}: Unknown command", command).as_bytes())?;
                         }
                     }
                 }
@@ -107,11 +175,53 @@ impl ClientHandler {
         return u8::from_str_radix(src, 10);
     }
 
-    fn parse_u32(&self, src: &str) -> Result<u32, ParseIntError> {
-        if src.starts_with("0x") {
-            return u32::from_str_radix(src.trim_start_matches("0x"), 16);
+    fn usage(&mut self, command: &str, specs: &Vec<Spec>) -> std::io::Result<()> {
+        let mut out = String::new();
+        out += format!("Usage {}", command).as_str();
+        for spec in specs {
+            if spec.required {
+                out += format!(" <{}>", spec.name).as_str();
+            } else {
+                out += format!(" [{}]", spec.name).as_str();
+            }
         }
-        return u32::from_str_radix(src, 10);
+        out += "\r\n";
+        self.stream.write_all(out.as_bytes())?;
+        return Ok(());
+    }
+
+    fn generic_command(
+        &mut self,
+        command: &str,
+        operation: Operation,
+        tokens: &Vec<String>,
+        specs: &Vec<Spec>,
+    ) -> std::io::Result<()> {
+        let mut params = Vec::new();
+        for (i, spec) in specs.iter().enumerate() {
+            if tokens.len() <= i + 1 {
+                if spec.required {
+                    self.usage(command, specs)?;
+                    return Ok(());
+                }
+                break;
+            }
+            if let Ok(param) = (spec.parse)(&tokens[i + 1]) {
+                params.push(param);
+            } else {
+                self.stream
+                    .write_all(format!("Invalid {}\r\n", spec.name).as_bytes())?;
+                return Ok(());
+            }
+        }
+        let request = Request {
+            client_id: self.client_id,
+            command: command.to_string(),
+            operation: operation,
+            params: params,
+        };
+        self.handle_command(request, true)?;
+        return Ok(());
     }
 
     fn ping(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
@@ -126,79 +236,14 @@ impl ClientHandler {
         let request = Request {
             client_id: self.client_id,
             command: command.to_string(),
-            params: vec![Param::U8(module_id)],
+            operation: Operation::Ping,
+            params: vec![RequestParam::U8(module_id)],
         };
         self.handle_command(request, false)?;
         self.stream
             .write_all(format!("sent to ID 0x{module_id:02x} ...").as_bytes())?;
         self.handle_result(false)?;
         return Ok(());
-    }
-
-    fn cancel_uid(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
-        if tokens.len() < 2 {
-            self.stream.write_all(b"Usage: cancel-uid <uid>\r\n")?;
-            return Ok(());
-        }
-        let Ok(module_uid) = self.parse_u32(&tokens[1]) else {
-            self.stream.write_all(b"Invalid module uid\r\n")?;
-            return Ok(());
-        };
-        let request = Request {
-            client_id: self.client_id,
-            command: command.to_string(),
-            params: vec![Param::U32(module_uid)],
-        };
-        return self.handle_command(request, true);
-    }
-
-    /// Simulates an individual module sign in.
-    ///
-    /// # Arguments
-    ///
-    /// - `command` (`&str`) - Command name.
-    /// - `tokens` (`&Vec<String>`) - Source command parameter strings.
-    ///
-    /// # Returns
-    ///
-    /// - `std::io::Result<()>` - Success or ModuleManagementError.
-    fn pretend_sign_in(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
-        if tokens.len() < 2 {
-            self.stream.write_all(b"Usage: pretend-sign-in <uid>\r\n")?;
-            return Ok(());
-        }
-        let Ok(module_uid) = self.parse_u32(&tokens[1]) else {
-            self.stream.write_all(b"Invalid module uid\r\n")?;
-            return Ok(());
-        };
-        let request = Request {
-            client_id: self.client_id,
-            command: command.to_string(),
-            params: vec![Param::U32(module_uid)],
-        };
-        return self.handle_command(request, true);
-    }
-
-    fn pretend_notify_id(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
-        if tokens.len() < 3 {
-            self.stream
-                .write_all(b"Usage: pretend-notify-id <uid> <id>\r\n")?;
-            return Ok(());
-        }
-        let Ok(module_uid) = self.parse_u32(&tokens[1]) else {
-            self.stream.write_all(b"Invalid module uid\r\n")?;
-            return Ok(());
-        };
-        let Ok(module_id) = self.parse_u8(&tokens[2]) else {
-            self.stream.write_all(b"Invalid module uid\r\n")?;
-            return Ok(());
-        };
-        let request = Request {
-            client_id: self.client_id,
-            command: command.to_string(),
-            params: vec![Param::U32(module_uid), Param::U8(module_id)],
-        };
-        return self.handle_command(request, true);
     }
 
     fn handle_command(
@@ -265,7 +310,7 @@ pub fn start_command_processor(
 
     let clone_result_senders = Arc::clone(&result_senders);
     thread::spawn(move || {
-        let mut next_client_id = 0;
+        let mut next_client_id = 1;
         loop {
             let client_id = next_client_id;
             next_client_id += 1;

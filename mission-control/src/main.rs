@@ -3,16 +3,17 @@ pub mod can_controller;
 pub mod command_processor;
 pub mod event_type;
 pub mod module_manager;
+pub mod operation;
 
+use crate::can_controller::CanController;
+use crate::command_processor::{CommandResult, start_command_processor};
+use crate::event_type::EventType;
+use crate::module_manager::{ErrorType, ModuleManager};
+use crate::operation::Request;
 use dashmap::DashMap;
 use env_logger::Env;
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
-
-use crate::can_controller::CanController;
-use crate::command_processor::{CommandResult, Request, start_command_processor};
-use crate::event_type::EventType;
-use crate::module_manager::{ErrorType, ModuleManager};
 
 fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
@@ -35,7 +36,6 @@ fn main() {
         let event_type = event_notif_receiver.recv().unwrap();
         match event_type {
             EventType::MessageRx => {
-                // TODO: Do something to this deep nest
                 if let Some(message) = can_controller.get_message() {
                     match module_manager.handle_message(message) {
                         Ok(result_or_none) => {
