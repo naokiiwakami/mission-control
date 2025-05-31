@@ -116,9 +116,10 @@ pub extern "C" fn notify_message(message: *mut can_message_t) {
     let holder = EVENT_FD_HOLDER.lock().unwrap();
     if let Some(notifier) = &holder.notifier {
         if let Some(rx_sender) = &holder.rx_sender {
-            if let Err(error) = rx_sender.send(message as u64) {
-            } else if let Err(error) = notifier.send(EventType::MessageRx) {
-                log::error!("Notif error: {error:?}");
+            if let Err(e) = rx_sender.send(message as u64) {
+                log::error!("Failed to put a new RX message to channel: {e:?}");
+            } else if let Err(e) = notifier.send(EventType::MessageRx) {
+                log::error!("Failed to notify RX: {e:?}");
             }
         }
     }
@@ -197,7 +198,7 @@ impl CanController {
     /// ```
     pub fn put_message(&self, mut message: CanMessage) {
         // The CAN interface will take care of releasing the message.
-        // We disconnect the object from the Rust ecosystem here.
+        // We disconnect the C object from the Rust ecosystem here.
         message.detach();
         if let Err(e) = self.tx_sender.send(message) {
             log::error!("Failed to put a tx message to pipe: {e:?}");
