@@ -14,6 +14,8 @@ pub type CommandResult = Result<Option<String>, ModuleManagementError>;
 #[derive(Debug)]
 pub enum Param {
     U8(u8),
+    U16(u16),
+    U32(u32),
     Text(String),
 }
 
@@ -68,6 +70,12 @@ impl ClientHandler {
                         "ping" => {
                             self.ping(&command, &tokens)?;
                         }
+                        "cancel-uid" => {
+                            self.cancel_uid(&command, &tokens)?;
+                        }
+                        "pretend-sign-in" => {
+                            self.pretend_sign_in(&command, &tokens)?;
+                        }
                         "quit" => {
                             self.stream.write_all(b"bye!\r\n")?;
                             return Ok(());
@@ -96,17 +104,22 @@ impl ClientHandler {
         return u8::from_str_radix(src, 10);
     }
 
+    fn parse_32(&self, src: &str) -> Result<u32, ParseIntError> {
+        if src.starts_with("0x") {
+            return u32::from_str_radix(src.trim_start_matches("0x"), 16);
+        }
+        return u32::from_str_radix(src, 10);
+    }
+
     fn ping(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
         if tokens.len() < 2 {
             self.stream.write_all(b"Usage: ping <id>\r\n")?;
             return Ok(());
         }
-        let parse_result = self.parse_u8(&tokens[1]);
-        if let Err(_) = parse_result {
+        let Ok(module_id) = self.parse_u8(&tokens[1]) else {
             self.stream.write_all(b"Invalid module id\r\n")?;
             return Ok(());
-        }
-        let module_id: u8 = parse_result.unwrap();
+        };
         let request = Request {
             client_id: self.client_id,
             command: command.to_string(),
@@ -117,6 +130,50 @@ impl ClientHandler {
             .write_all(format!("sent to ID 0x{module_id:02x} ...").as_bytes())?;
         self.handle_result(false)?;
         return Ok(());
+    }
+
+    fn cancel_uid(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        if tokens.len() < 2 {
+            self.stream.write_all(b"Usage: cancel-uid <uid>\r\n")?;
+            return Ok(());
+        }
+        let Ok(module_uid) = self.parse_32(&tokens[1]) else {
+            self.stream.write_all(b"Invalid module uid\r\n")?;
+            return Ok(());
+        };
+        let request = Request {
+            client_id: self.client_id,
+            command: command.to_string(),
+            params: vec![Param::U32(module_uid)],
+        };
+        return self.handle_command(request, true);
+    }
+
+    /// Simulates an individual module sign in.
+    ///
+    /// # Arguments
+    ///
+    /// - `command` (`&str`) - Command name.
+    /// - `tokens` (`&Vec<String>`) - Source command parameter strings.
+    ///
+    /// # Returns
+    ///
+    /// - `std::io::Result<()>` - Success or ModuleManagementError.
+    fn pretend_sign_in(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        if tokens.len() < 2 {
+            self.stream.write_all(b"Usage: pretend-sign-in <uid>\r\n")?;
+            return Ok(());
+        }
+        let Ok(module_uid) = self.parse_32(&tokens[1]) else {
+            self.stream.write_all(b"Invalid module uid\r\n")?;
+            return Ok(());
+        };
+        let request = Request {
+            client_id: self.client_id,
+            command: command.to_string(),
+            params: vec![Param::U32(module_uid)],
+        };
+        return self.handle_command(request, true);
     }
 
     fn handle_command(

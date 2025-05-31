@@ -19,7 +19,7 @@ fn main() {
     log::info!("Analog3 mission control started");
     let (event_notifier, event_notif_receiver) = std::sync::mpsc::channel();
     let can_controller = CanController::new(event_notifier.clone());
-    let mut module_manager = ModuleManager::new(&can_controller);
+    let mut module_manager = ModuleManager::new(&can_controller).unwrap();
 
     let (request_sender, request_receiver) = channel::<Request>();
     let result_senders: Arc<DashMap<u32, Sender<CommandResult>>> = Arc::new(DashMap::new());
