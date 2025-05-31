@@ -1,18 +1,22 @@
 #![allow(non_upper_case_globals, non_camel_case_types, non_snake_case)]
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{LazyLock, Mutex};
 
 use crate::event_type::EventType;
 
 pub struct CanMessage {
-    message: *mut can_message_t,
+    pub message: *mut can_message_t,
+    message_attached: bool,
 }
 
 impl CanMessage {
     pub fn new(message: *mut can_message_t) -> Self {
-        return Self { message: message };
+        return Self {
+            message: message,
+            message_attached: true,
+        };
     }
 
     pub fn id(&self) -> u32 {
@@ -78,14 +82,14 @@ impl CanMessage {
     /// Detach the inside message after its ownership is moved
     /// into the C can-controller library.
     pub fn detach(&mut self) {
-        self.message = std::ptr::null_mut();
+        self.message_attached = false;
     }
 }
 
 impl Drop for CanMessage {
     fn drop(&mut self) {
         unsafe {
-            if !self.message.is_null() {
+            if self.message_attached {
                 can_free_message(self.message);
             }
         }
@@ -96,27 +100,24 @@ unsafe impl Sync for CanMessage {}
 unsafe impl Send for CanMessage {}
 
 struct FdHolder {
-    fd: libc::c_int,
+    rx_sender: Option<Sender<u64>>,
     notifier: Option<Sender<EventType>>,
 }
 
 static EVENT_FD_HOLDER: LazyLock<Mutex<FdHolder>> = LazyLock::new(|| {
     Mutex::new(FdHolder {
-        fd: 0,
+        rx_sender: None,
         notifier: None,
     })
 });
 
 #[unsafe(no_mangle)]
 pub extern "C" fn notify_message(message: *mut can_message_t) {
-    log::debug!("message received: {:#x}", message as u64);
     let holder = EVENT_FD_HOLDER.lock().unwrap();
-    unsafe {
-        if let Some(sender) = &holder.notifier {
-            if holder.fd > 0 {
-                libc::eventfd_write(holder.fd, message as u64);
-            }
-            if let Err(error) = sender.send(EventType::MessageRx) {
+    if let Some(notifier) = &holder.notifier {
+        if let Some(rx_sender) = &holder.rx_sender {
+            if let Err(error) = rx_sender.send(message as u64) {
+            } else if let Err(error) = notifier.send(EventType::MessageRx) {
                 log::error!("Notif error: {error:?}");
             }
         }
@@ -124,49 +125,47 @@ pub extern "C" fn notify_message(message: *mut can_message_t) {
 }
 
 pub struct CanController {
-    rx_fd: libc::c_int,
-    tx_fd: libc::c_int,
+    rx_receiver: Receiver<u64>,
+    tx_sender: Sender<CanMessage>,
+    tx_receiver: Receiver<CanMessage>,
     tx_notif: Sender<EventType>,
 }
 
 impl CanController {
     pub fn new(notifier: Sender<EventType>) -> Self {
         unsafe {
-            // set up eventfd for CAN RX pipe
-            let rx_fd = libc::eventfd(0, 0);
-            log::debug!("rx_fd={}", rx_fd);
-            if rx_fd < 0 {
-                // TODO: handle error
-            }
+            let (rx_sender, rx_receiver) = std::sync::mpsc::channel();
 
             let mut holder = EVENT_FD_HOLDER.lock().unwrap();
-            holder.fd = rx_fd;
+            holder.rx_sender = Some(rx_sender);
             holder.notifier = Some(notifier.clone());
 
-            // set up eventfd for CAN TX pipe
-            let tx_fd = libc::eventfd(0, 0);
-            log::debug!("tx_fd={}", tx_fd);
-            if tx_fd < 0 {
-                // TODO: handle error
-            }
+            let (tx_sender, tx_receiver) = std::sync::mpsc::channel();
 
             // OK the CAN interface is ready to be initialized
             can_set_rx_message_consumer(Some(notify_message));
             can_init();
 
             return Self {
-                rx_fd: rx_fd,
-                tx_fd: tx_fd,
+                rx_receiver: rx_receiver,
+                tx_sender: tx_sender,
+                tx_receiver: tx_receiver,
                 tx_notif: notifier,
             };
         }
     }
 
     pub fn get_message(&self) -> Option<CanMessage> {
-        return match self.get_message_from_pipe(self.rx_fd) {
-            Some(message) => Some(CanMessage::new(message)),
-            None => None,
-        };
+        match self.rx_receiver.recv() {
+            Ok(data) => unsafe {
+                let message: *mut can_message_t = std::mem::transmute(data);
+                return Some(CanMessage::new(message));
+            },
+            Err(e) => {
+                log::error!("Error in fetching incoming message from channel: {e:?}");
+                return None;
+            }
+        }
     }
 
     pub fn create_message(&self) -> CanMessage {
@@ -197,15 +196,15 @@ impl CanController {
     /// boundary.put_message(message);
     /// ```
     pub fn put_message(&self, mut message: CanMessage) {
-        unsafe {
-            libc::eventfd_write(self.tx_fd, message.message as u64);
-        }
         // The CAN interface will take care of releasing the message.
         // We disconnect the object from the Rust ecosystem here.
         message.detach();
-        match self.tx_notif.send(EventType::MessageTx) {
-            Ok(_) => {}
-            Err(e) => log::error!("Failed to send MessageTx notif: {e:?}"),
+        if let Err(e) = self.tx_sender.send(message) {
+            log::error!("Failed to put a tx message to pipe: {e:?}");
+            return;
+        }
+        if let Err(e) = self.tx_notif.send(EventType::MessageTx) {
+            log::error!("Failed to send MessageTx notif: {e:?}");
         }
     }
 
@@ -217,33 +216,15 @@ impl CanController {
     ///
     /// - `&self` (`Boundary`) - Myself.
     pub fn send_message(&self) {
-        match self.get_message_from_pipe(self.tx_fd) {
-            Some(message) => {
+        match self.tx_receiver.recv() {
+            Ok(message) => {
+                // if let Some(message) = self.get_message_from_pipe(self.tx_fd) {
                 unsafe {
-                    log::debug!("Sending message, ID={:08x}", (*message).id);
-                    can_send_message(message);
-                };
-            }
-            None => {}
-        }
-    }
-
-    fn get_message_from_pipe(&self, fd: libc::c_int) -> Option<*mut can_message_t> {
-        unsafe {
-            let mut data = 0;
-            let result = libc::eventfd_read(fd, &mut data);
-            if result < 0 {
-                let errno = *libc::__errno_location();
-                if errno == libc::EAGAIN || errno == libc::EWOULDBLOCK {
-                    log::debug!("eagain");
-                    return None;
+                    can_send_message(message.message);
                 }
-                // TODO: handle error
-                log::error!("read eventfd failed, fd={}, errno={}", self.rx_fd, errno);
-                return None;
+                // }
             }
-            let message: *mut can_message_t = std::mem::transmute(data);
-            return Some(message);
+            Err(e) => log::error!("tx message error: {e:?}"),
         }
     }
 }

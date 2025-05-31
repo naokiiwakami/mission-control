@@ -23,6 +23,7 @@ pub const A3_VOICE_MSG_PITCH_BEND: u8 = 0x0E;
 /* Module administration opcodes */
 pub const A3_ADMIN_SIGN_IN: u8 = 0x01;
 pub const A3_ADMIN_NOTIFY_ID: u8 = 0x02;
+pub const A3_ADMIN_REQ_UID_CANCEL: u8 = 0x03;
 
 /* Mission control opcodes */
 pub const A3_MC_SIGN_IN: u8 = 0x01;

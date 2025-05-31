@@ -76,6 +76,9 @@ impl ClientHandler {
                         "pretend-sign-in" => {
                             self.pretend_sign_in(&command, &tokens)?;
                         }
+                        "pretend-notify-id" => {
+                            self.pretend_notify_id(&command, &tokens)?;
+                        }
                         "quit" => {
                             self.stream.write_all(b"bye!\r\n")?;
                             return Ok(());
@@ -104,7 +107,7 @@ impl ClientHandler {
         return u8::from_str_radix(src, 10);
     }
 
-    fn parse_32(&self, src: &str) -> Result<u32, ParseIntError> {
+    fn parse_u32(&self, src: &str) -> Result<u32, ParseIntError> {
         if src.starts_with("0x") {
             return u32::from_str_radix(src.trim_start_matches("0x"), 16);
         }
@@ -137,7 +140,7 @@ impl ClientHandler {
             self.stream.write_all(b"Usage: cancel-uid <uid>\r\n")?;
             return Ok(());
         }
-        let Ok(module_uid) = self.parse_32(&tokens[1]) else {
+        let Ok(module_uid) = self.parse_u32(&tokens[1]) else {
             self.stream.write_all(b"Invalid module uid\r\n")?;
             return Ok(());
         };
@@ -164,7 +167,7 @@ impl ClientHandler {
             self.stream.write_all(b"Usage: pretend-sign-in <uid>\r\n")?;
             return Ok(());
         }
-        let Ok(module_uid) = self.parse_32(&tokens[1]) else {
+        let Ok(module_uid) = self.parse_u32(&tokens[1]) else {
             self.stream.write_all(b"Invalid module uid\r\n")?;
             return Ok(());
         };
@@ -172,6 +175,28 @@ impl ClientHandler {
             client_id: self.client_id,
             command: command.to_string(),
             params: vec![Param::U32(module_uid)],
+        };
+        return self.handle_command(request, true);
+    }
+
+    fn pretend_notify_id(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        if tokens.len() < 3 {
+            self.stream
+                .write_all(b"Usage: pretend-notify-id <uid> <id>\r\n")?;
+            return Ok(());
+        }
+        let Ok(module_uid) = self.parse_u32(&tokens[1]) else {
+            self.stream.write_all(b"Invalid module uid\r\n")?;
+            return Ok(());
+        };
+        let Ok(module_id) = self.parse_u8(&tokens[2]) else {
+            self.stream.write_all(b"Invalid module uid\r\n")?;
+            return Ok(());
+        };
+        let request = Request {
+            client_id: self.client_id,
+            command: command.to_string(),
+            params: vec![Param::U32(module_uid), Param::U8(module_id)],
         };
         return self.handle_command(request, true);
     }

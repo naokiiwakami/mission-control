@@ -71,7 +71,8 @@ impl<'a> ModuleManager<'a> {
         if message.is_extended() {
             return match opcode {
                 a3::A3_ADMIN_SIGN_IN => self.handle_remote_sign_in(message),
-                a3::A3_ADMIN_NOTIFY_ID => self.handle_remote_register_module(message),
+                a3::A3_ADMIN_NOTIFY_ID => self.handle_remote_id_notification(message),
+                a3::A3_ADMIN_REQ_UID_CANCEL => self.handle_uid_cancel_req(message),
                 _ => {
                     return Err(ModuleManagementError {
                         error_type: ErrorType::A3OpCodeUnknown,
@@ -115,7 +116,7 @@ impl<'a> ModuleManager<'a> {
         return Ok(None);
     }
 
-    fn handle_remote_register_module(
+    fn handle_remote_id_notification(
         &mut self,
         in_message: CanMessage,
     ) -> Result<Option<Result<Response>>> {
@@ -128,6 +129,18 @@ impl<'a> ModuleManager<'a> {
         };
         self.modules_by_id.insert(module.id, module.clone());
         self.modules_by_uid.insert(module.uid, module);
+        return Ok(None);
+    }
+
+    fn handle_uid_cancel_req(
+        &mut self,
+        in_message: CanMessage,
+    ) -> Result<Option<Result<Response>>> {
+        let remote_uid = in_message.id();
+        log::debug!("Module UID cancel requested; uid {remote_uid:08x}");
+        if let Some(module) = self.modules_by_uid.remove(&remote_uid) {
+            self.modules_by_id.remove(&module.id);
+        }
         return Ok(None);
     }
 
@@ -185,17 +198,29 @@ impl<'a> ModuleManager<'a> {
         let mut out_message = self.can_controller.create_message();
         out_message.set_id(remote_uid);
         out_message.set_extended(true);
-        out_message.set_remote(true);
-        out_message.set_data_length(0);
+        out_message.set_data_length(1);
+        out_message.set_data(0, a3::A3_ADMIN_REQ_UID_CANCEL);
         self.can_controller.put_message(out_message);
         return Ok(());
     }
+
     fn im_sign_in(&self, remote_uid: u32) -> Result<()> {
         let mut out_message = self.can_controller.create_message();
         out_message.set_id(remote_uid);
         out_message.set_extended(true);
         out_message.set_data_length(1);
         out_message.set_data(0, a3::A3_ADMIN_SIGN_IN);
+        self.can_controller.put_message(out_message);
+        return Ok(());
+    }
+
+    fn im_notify_id(&self, remote_uid: u32, remote_id: u8) -> Result<()> {
+        let mut out_message = self.can_controller.create_message();
+        out_message.set_id(remote_uid);
+        out_message.set_extended(true);
+        out_message.set_data_length(2);
+        out_message.set_data(0, a3::A3_ADMIN_NOTIFY_ID);
+        out_message.set_data(1, remote_id);
         self.can_controller.put_message(out_message);
         return Ok(());
     }
@@ -208,6 +233,7 @@ impl<'a> ModuleManager<'a> {
             "ping" => self.process_ping(request),
             "cancel-uid" => self.process_cancel_uid(request),
             "pretend-sign-in" => self.process_pseudo_sign_in(request),
+            "pretend-notify-id" => self.process_pseudo_notify_id(request),
             _ => Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandUnknown,
                 message: format!("Unknown command: {}\r\n", request.command),
@@ -261,7 +287,9 @@ impl<'a> ModuleManager<'a> {
             });
         };
         let mut out = String::new();
-        if let None = self.modules_by_uid.remove(&remote_uid) {
+        if let Some(module) = self.modules_by_uid.remove(&remote_uid) {
+            self.modules_by_id.remove(&module.id);
+        } else {
             if let Err(e) = write!(
                 out,
                 "Warn: The uid 0x{:08x} not found in the module list, sending the message anyway\r\n",
@@ -302,6 +330,30 @@ impl<'a> ModuleManager<'a> {
         Ok(Response {
             client_id: client_id,
             reply: Some(format!("Sign-in sent as uid {:08x}\r\n", remote_uid)),
+        })
+    }
+
+    fn process_pseudo_notify_id(&mut self, request: &Request) -> Result<Response> {
+        let client_id = request.client_id;
+        let Param::U32(remote_uid) = request.params[0] else {
+            return Err(ModuleManagementError {
+                error_type: ErrorType::UserCommandInvalidRequest,
+                message: "The first parameter should be of type u32".to_string(),
+            });
+        };
+        let Param::U8(remote_id) = request.params[1] else {
+            return Err(ModuleManagementError {
+                error_type: ErrorType::UserCommandInvalidRequest,
+                message: "The second parameter should be of type u8".to_string(),
+            });
+        };
+        self.im_notify_id(remote_uid, remote_id)?;
+        Ok(Response {
+            client_id: client_id,
+            reply: Some(format!(
+                "Notify ID sent as uid {:08x} id {:02x}\r\n",
+                remote_uid, remote_id
+            )),
         })
     }
 
