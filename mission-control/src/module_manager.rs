@@ -88,7 +88,7 @@ impl<'a> ModuleManager<'a> {
             };
         }
         return match opcode {
-            a3::A3_IM_PING_REPLY => self.handle_ping_reply(message),
+            a3::A3_IM_REPLY_PING => self.handle_ping_reply(message),
             _ => {
                 return Err(ModuleManagementError {
                     error_type: ErrorType::A3OpCodeUnknown,
@@ -189,12 +189,13 @@ impl<'a> ModuleManager<'a> {
         return Ok(());
     }
 
-    fn ping(&self, remote_id: u8, stream_id: u8) -> Result<()> {
+    fn ping(&self, remote_id: u8, stream_id: u8, enable_visual: u8) -> Result<()> {
         let mut out_message = self.create_message();
         out_message.set_data_length(3);
         out_message.set_data(0, a3::A3_MC_PING);
         out_message.set_data(1, remote_id);
         out_message.set_data(2, stream_id);
+        out_message.set_data(3, enable_visual);
         self.can_controller.put_message(out_message);
         return Ok(());
     }
@@ -298,6 +299,16 @@ impl<'a> ModuleManager<'a> {
                 message: "The first parameter should be of type u8".to_string(),
             });
         };
+        let mut enable_visual = 0;
+        if request.params.len() >= 2 {
+            let RequestParam::Bool(enabled) = request.params[1] else {
+                return Err(ModuleManagementError {
+                    error_type: ErrorType::UserCommandInvalidRequest,
+                    message: "The second parameter should be of type bool".to_string(),
+                });
+            };
+            enable_visual = if enabled { 1 } else { 0 };
+        };
 
         let stream_id = self.get_next_stream_id();
         self.streams.insert(
@@ -322,7 +333,7 @@ impl<'a> ModuleManager<'a> {
             },
         );
 
-        self.ping(remote_id, stream_id)?;
+        self.ping(remote_id, stream_id, enable_visual)?;
 
         return self.conclude(
             &result_sender,

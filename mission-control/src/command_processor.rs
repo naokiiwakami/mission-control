@@ -23,11 +23,12 @@ impl Spec {
             name: name.to_string(),
             required: required,
             parse: |src| {
+                let trimmed = src.trim();
                 let parse_u8 = || {
-                    if src.starts_with("0x") {
-                        u8::from_str_radix(src.trim_start_matches("0x"), 16)
+                    if trimmed.starts_with("0x") {
+                        u8::from_str_radix(trimmed.trim_start_matches("0x"), 16)
                     } else {
-                        u8::from_str_radix(src, 10)
+                        u8::from_str_radix(trimmed, 10)
                     }
                 };
                 return match parse_u8() {
@@ -44,11 +45,12 @@ impl Spec {
             name: name.to_string(),
             required: required,
             parse: |src| {
+                let trimmed = src.trim();
                 let parse_16 = || {
-                    if src.starts_with("0x") {
-                        u16::from_str_radix(src.trim_start_matches("0x"), 16)
+                    if trimmed.starts_with("0x") {
+                        u16::from_str_radix(trimmed.trim_start_matches("0x"), 16)
                     } else {
-                        u16::from_str_radix(src, 10)
+                        u16::from_str_radix(trimmed, 10)
                     }
                 };
                 return match parse_16() {
@@ -64,11 +66,12 @@ impl Spec {
             name: name.to_string(),
             required: required,
             parse: |src| {
+                let trimmed = src.trim();
                 let parse_16 = || {
-                    if src.starts_with("0x") {
-                        u32::from_str_radix(src.trim_start_matches("0x"), 16)
+                    if trimmed.starts_with("0x") {
+                        u32::from_str_radix(trimmed.trim_start_matches("0x"), 16)
                     } else {
-                        u32::from_str_radix(src, 10)
+                        u32::from_str_radix(trimmed, 10)
                     }
                 };
                 return match parse_16() {
@@ -84,7 +87,20 @@ impl Spec {
         Self {
             name: name,
             required: required,
-            parse: |src| Ok(RequestParam::Text(src.to_string())),
+            parse: |src| Ok(RequestParam::Text(src.trim().to_string())),
+        }
+    }
+
+    pub fn bool(name: &str, required: bool) -> Self {
+        Self {
+            name: name.to_string(),
+            required: required,
+            parse: |src| {
+                return match src.trim().parse() {
+                    Ok(value) => Ok(RequestParam::Bool(value)),
+                    Err(_) => Err(ParseParamError {}),
+                };
+            },
         }
     }
 }
@@ -129,7 +145,7 @@ impl ClientHandler {
                             &command,
                             Operation::Ping,
                             &tokens,
-                            &vec![Spec::u8("id", true)],
+                            &vec![Spec::u8("id", true), Spec::bool("visual", false)],
                         )?,
                         "cancel-uid" => self.process(
                             &command,

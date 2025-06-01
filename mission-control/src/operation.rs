@@ -17,6 +17,7 @@ pub enum RequestParam {
     U16(u16),
     U32(u32),
     Text(String),
+    Bool(bool),
 }
 
 #[derive(Debug)]

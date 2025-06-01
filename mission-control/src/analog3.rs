@@ -29,10 +29,10 @@ pub const A3_ADMIN_REQ_UID_CANCEL: u8 = 0x03;
 pub const A3_MC_SIGN_IN: u8 = 0x01;
 pub const A3_MC_ASSIGN_MODULE_ID: u8 = 0x02;
 pub const A3_MC_PING: u8 = 0x03;
-pub const A3_MC_GET_CONFIG_REQUEST: u8 = 0x04;
+pub const A3_MC_REQUEST_NAME: u8 = 0x04;
 
 /* Individual module opcodes */
-pub const A3_IM_PING_REPLY: u8 = 0x01;
+pub const A3_IM_REPLY_PING: u8 = 0x01;
 pub const A3_IM_GET_CONFIG_REPLY: u8 = 0x02;
 
 pub const A3_DATA_LENGTH: u8 = 8;
