@@ -54,9 +54,9 @@ fn main() {
                 let request: Request = request_receiver.recv().unwrap();
                 match result_senders.get(&request.client_id) {
                     Some(result_sender) => {
-                        match module_manager.user_request(&request, result_sender.clone()) {
-                            Ok(response) => result_sender.send(Ok(response)).unwrap(),
-                            Err(e) => result_sender.send(Err(e)).unwrap(),
+                        if let Err(e) = module_manager.user_request(&request, result_sender.clone())
+                        {
+                            result_sender.send(Err(e)).unwrap();
                         }
                     }
                     None => {

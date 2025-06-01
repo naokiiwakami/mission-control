@@ -4,7 +4,6 @@ use crate::operation::{Operation, OperationResult, Request, RequestParam};
 use dashmap::DashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::num::ParseIntError;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
@@ -125,28 +124,26 @@ impl ClientHandler {
                         "hello" => {
                             self.stream.write_all(b"hi\r\n")?;
                         }
-                        "list" => {
-                            self.generic_command(&command, Operation::List, &tokens, &vec![])?
-                        }
-                        "ping" => self.generic_command(
+                        "list" => self.process(&command, Operation::List, &tokens, &vec![])?,
+                        "ping" => self.process(
                             &command,
                             Operation::Ping,
                             &tokens,
                             &vec![Spec::u8("id", true)],
                         )?,
-                        "cancel-uid" => self.generic_command(
+                        "cancel-uid" => self.process(
                             &command,
                             Operation::RequestUidCancel,
                             &tokens,
                             &vec![Spec::u32("uid", true)],
                         )?,
-                        "pretend-sign-in" => self.generic_command(
+                        "pretend-sign-in" => self.process(
                             &command,
                             Operation::PretendSignIn,
                             &tokens,
                             &vec![Spec::u32("uid", true)],
                         )?,
-                        "pretend-notify-id" => self.generic_command(
+                        "pretend-notify-id" => self.process(
                             &command,
                             Operation::PretendNotifyId,
                             &tokens,
@@ -184,7 +181,7 @@ impl ClientHandler {
         return Ok(());
     }
 
-    fn generic_command(
+    fn process(
         &mut self,
         command: &str,
         operation: Operation,
@@ -220,15 +217,25 @@ impl ClientHandler {
         self.request_sender.send(request).unwrap();
         self.notifier.send(EventType::RequestSent).unwrap();
 
-        return self.handle_result();
+        return self.handle_result(0);
     }
 
-    fn handle_result(&mut self) -> std::io::Result<()> {
+    fn handle_result(&mut self, stream_id: u8) -> std::io::Result<()> {
         let recv_result = self.result_receiver.recv_timeout(Duration::from_secs(10));
         return match recv_result {
             Ok(operation_result) => self.handle_result_inner(operation_result),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 self.stream.write_all(b" timeout\r\n")?;
+                if stream_id > 0 {
+                    let request = Request {
+                        client_id: self.client_id,
+                        command: "cancel".to_string(),
+                        operation: Operation::Cancel,
+                        params: vec![RequestParam::U8(stream_id)],
+                    };
+                    self.request_sender.send(request).unwrap();
+                    self.notifier.send(EventType::RequestSent).unwrap();
+                }
                 return Ok(());
             }
             Err(e) => {
@@ -242,11 +249,9 @@ impl ClientHandler {
     fn handle_result_inner(&mut self, operation_result: OperationResult) -> std::io::Result<()> {
         match operation_result {
             Ok(response) => {
-                if let Some(reply) = response.reply {
-                    self.stream.write_all(reply.as_bytes())?;
-                }
+                self.stream.write_all(response.reply.as_bytes())?;
                 if response.more {
-                    self.handle_result()?;
+                    self.handle_result(response.stream_id)?;
                 }
             }
             Err(e) => match e.error_type {
@@ -285,8 +290,8 @@ pub fn start_command_processor(
                     let clone_clone_result_senders = Arc::clone(&clone_result_senders);
                     thread::spawn(move || {
                         let mut client_handler = ClientHandler {
-                            client_id: client_id,
-                            stream: stream,
+                            client_id,
+                            stream,
                             notifier: notifier_clone,
                             request_sender: request_sender_clone,
                             result_receiver,

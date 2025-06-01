@@ -29,8 +29,10 @@ pub struct Request {
 
 #[derive(Debug)]
 pub struct Response {
-    pub reply: Option<String>,
+    pub reply: String,
     pub more: bool,
+    /// non-zero ID would be returned when more is true
+    pub stream_id: u8,
 }
 
 pub type OperationResult = Result<Response, ModuleManagementError>;
