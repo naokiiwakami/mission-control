@@ -29,8 +29,8 @@ pub struct Request {
 
 #[derive(Debug)]
 pub struct Response {
-    pub client_id: u32,
     pub reply: Option<String>,
+    pub more: bool,
 }
 
 pub type OperationResult = Result<Response, ModuleManagementError>;

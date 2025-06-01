@@ -128,7 +128,12 @@ impl ClientHandler {
                         "list" => {
                             self.generic_command(&command, Operation::List, &tokens, &vec![])?
                         }
-                        "ping" => self.ping(&command, &tokens)?,
+                        "ping" => self.generic_command(
+                            &command,
+                            Operation::Ping,
+                            &tokens,
+                            &vec![Spec::u8("id", true)],
+                        )?,
                         "cancel-uid" => self.generic_command(
                             &command,
                             Operation::RequestUidCancel,
@@ -164,13 +169,6 @@ impl ClientHandler {
         }
     }
 
-    fn parse_u8(&self, src: &str) -> Result<u8, ParseIntError> {
-        if src.starts_with("0x") {
-            return u8::from_str_radix(src.trim_start_matches("0x"), 16);
-        }
-        return u8::from_str_radix(src, 10);
-    }
-
     fn usage(&mut self, command: &str, specs: &Vec<Spec>) -> std::io::Result<()> {
         let mut out = String::new();
         out += format!("Usage {}", command).as_str();
@@ -193,6 +191,7 @@ impl ClientHandler {
         tokens: &Vec<String>,
         specs: &Vec<Spec>,
     ) -> std::io::Result<()> {
+        // build the request
         let mut params = Vec::new();
         for (i, spec) in specs.iter().enumerate() {
             if tokens.len() <= i + 1 {
@@ -216,48 +215,18 @@ impl ClientHandler {
             operation: operation,
             params: params,
         };
-        self.handle_command(request, true)?;
-        return Ok(());
-    }
 
-    fn ping(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
-        if tokens.len() < 2 {
-            self.stream.write_all(b"Usage: ping <id>\r\n")?;
-            return Ok(());
-        }
-        let Ok(module_id) = self.parse_u8(&tokens[1]) else {
-            self.stream.write_all(b"Invalid module id\r\n")?;
-            return Ok(());
-        };
-        let request = Request {
-            client_id: self.client_id,
-            command: command.to_string(),
-            operation: Operation::Ping,
-            params: vec![RequestParam::U8(module_id)],
-        };
-        self.handle_command(request, false)?;
-        self.stream
-            .write_all(format!("sent to ID 0x{module_id:02x} ...").as_bytes())?;
-        self.handle_result(false)?;
-        return Ok(());
-    }
-
-    fn handle_command(
-        &mut self,
-        request: Request,
-        continue_on_empty_reply: bool,
-    ) -> std::io::Result<()> {
+        // send the request
         self.request_sender.send(request).unwrap();
         self.notifier.send(EventType::RequestSent).unwrap();
-        return self.handle_result(continue_on_empty_reply);
+
+        return self.handle_result();
     }
 
-    fn handle_result(&mut self, continue_on_empty_reply: bool) -> std::io::Result<()> {
+    fn handle_result(&mut self) -> std::io::Result<()> {
         let recv_result = self.result_receiver.recv_timeout(Duration::from_secs(10));
         return match recv_result {
-            Ok(operation_result) => {
-                self.handle_result_inner(operation_result, continue_on_empty_reply)
-            }
+            Ok(operation_result) => self.handle_result_inner(operation_result),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 self.stream.write_all(b" timeout\r\n")?;
                 return Ok(());
@@ -270,23 +239,16 @@ impl ClientHandler {
         };
     }
 
-    fn handle_result_inner(
-        &mut self,
-        operation_result: OperationResult,
-        continue_on_empty_reply: bool,
-    ) -> std::io::Result<()> {
+    fn handle_result_inner(&mut self, operation_result: OperationResult) -> std::io::Result<()> {
         match operation_result {
-            Ok(response) => match response.reply {
-                Some(reply) => {
+            Ok(response) => {
+                if let Some(reply) = response.reply {
                     self.stream.write_all(reply.as_bytes())?;
                 }
-                None => {
-                    if continue_on_empty_reply {
-                        // the reply will come later
-                        self.handle_result(false)?;
-                    }
+                if response.more {
+                    self.handle_result()?;
                 }
-            },
+            }
             Err(e) => match e.error_type {
                 ErrorType::UserCommandUnknown => self.stream.write_all(e.message.as_bytes())?,
                 _ => {

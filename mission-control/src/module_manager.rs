@@ -250,7 +250,7 @@ impl<'a> ModuleManager<'a> {
         }
     }
 
-    fn process_list(&mut self, request: &Request) -> Result<Response> {
+    fn process_list(&mut self, _request: &Request) -> Result<Response> {
         let mut out = String::new();
         for (id, module) in &self.modules_by_id {
             if let Err(e) = write!(out, "0x{:02x}: 0x{:08x}\r\n", id, module.uid) {
@@ -261,8 +261,8 @@ impl<'a> ModuleManager<'a> {
             }
         }
         return Ok(Response {
-            client_id: request.client_id,
             reply: Some(out),
+            more: false,
         });
     }
 
@@ -271,7 +271,6 @@ impl<'a> ModuleManager<'a> {
         request: &Request,
         result_sender: Sender<OperationResult>,
     ) -> Result<Response> {
-        let client_id = request.client_id;
         let RequestParam::U8(remote_id) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
@@ -290,8 +289,8 @@ impl<'a> ModuleManager<'a> {
                     let id = message.id() - a3::A3_ID_INDIVIDUAL_MODULE_BASE;
                     if let Some(sender) = sender_or_none {
                         let ok: OperationResult = Ok(Response {
-                            client_id: 0,
-                            reply: Some(format!(" replied by id 0x{:02x}\r\n", id)),
+                            reply: Some(format!(" id 0x{:02x} replied\r\n", id)),
+                            more: false,
                         });
                         if let Err(e) = sender.send(ok) {
                             log::error!("Failed to send ping reply: {e:?}");
@@ -305,13 +304,12 @@ impl<'a> ModuleManager<'a> {
         self.ping(remote_id, stream_id)?;
 
         return Ok(Response {
-            client_id: client_id,
-            reply: None,
+            reply: Some(format!("sent to id {:02x} ...", remote_id)),
+            more: true,
         });
     }
 
     fn process_cancel_uid_request(&mut self, request: &Request) -> Result<Response> {
-        let client_id = request.client_id;
         let RequestParam::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
@@ -345,13 +343,12 @@ impl<'a> ModuleManager<'a> {
             });
         }
         Ok(Response {
-            client_id: client_id,
             reply: Some(out),
+            more: false,
         })
     }
 
     fn process_pseudo_sign_in(&mut self, request: &Request) -> Result<Response> {
-        let client_id = request.client_id;
         let RequestParam::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
@@ -360,13 +357,12 @@ impl<'a> ModuleManager<'a> {
         };
         self.im_sign_in(remote_uid)?;
         Ok(Response {
-            client_id: client_id,
             reply: Some(format!("Sign-in sent as uid {:08x}\r\n", remote_uid)),
+            more: false,
         })
     }
 
     fn process_pseudo_notify_id(&mut self, request: &Request) -> Result<Response> {
-        let client_id = request.client_id;
         let RequestParam::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
@@ -381,11 +377,11 @@ impl<'a> ModuleManager<'a> {
         };
         self.im_notify_id(remote_uid, remote_id)?;
         Ok(Response {
-            client_id: client_id,
             reply: Some(format!(
                 "Notify ID sent as uid {:08x} id {:02x}\r\n",
                 remote_uid, remote_id
             )),
+            more: false,
         })
     }
 
