@@ -1,10 +1,10 @@
+use crate::analog3 as a3;
+use crate::can_controller::{CanController, CanMessage};
+use crate::operation::{Operation, OperationResult, Request, RequestParam, Response};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
-
-use crate::analog3 as a3;
-use crate::can_controller::{CanController, CanMessage};
-use crate::command_processor::{Param, Request, Response};
+use std::sync::mpsc::Sender;
 
 #[derive(Debug, Clone)]
 pub enum ErrorType {
@@ -32,12 +32,18 @@ impl std::error::Error for ModuleManagementError {}
 
 type Result<T> = std::result::Result<T, ModuleManagementError>;
 
+#[derive(Debug, Clone)]
+struct Stream {
+    consume_reply: fn(&CanMessage, &Option<Sender<OperationResult>>) -> Result<()>,
+    result_sender: Option<Sender<OperationResult>>,
+}
+
 pub struct ModuleManager<'a> {
     can_controller: &'a CanController,
     modules_by_id: HashMap<u8, Module>,
     modules_by_uid: HashMap<u32, Module>,
     next_stream_id: u8,
-    streams: HashMap<u8, u32>,
+    streams: HashMap<u8, Stream>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,10 +55,10 @@ struct Module {
 impl<'a> ModuleManager<'a> {
     pub fn new(can_controller: &'a CanController) -> Result<Self> {
         let new_instance = Self {
-            can_controller: can_controller,
+            can_controller,
             modules_by_uid: HashMap::new(),
             modules_by_id: HashMap::new(),
-            next_stream_id: 0,
+            next_stream_id: 1,
             streams: HashMap::new(),
         };
         new_instance.sign_in()?;
@@ -149,10 +155,9 @@ impl<'a> ModuleManager<'a> {
         let stream_id = in_message.get_data(1);
         log::debug!("Ping reply received; id {remote_id:03x}");
         match self.streams.remove(&stream_id) {
-            Some(client_id) => Ok(Some(Ok(Response {
-                client_id: client_id,
-                reply: Some(" replied\r\n".to_string()),
-            }))),
+            Some(stream) => {
+                (stream.consume_reply)(&in_message, &stream.result_sender).and_then(|_| Ok(None))
+            }
             None => Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandStreamIdMissing,
                 message: format!("stream_id: {stream_id}"),
@@ -227,71 +232,125 @@ impl<'a> ModuleManager<'a> {
 
     // User command handling /////////////////////////////////////////////////////
 
-    pub fn user_request(&mut self, request: &Request) -> Result<Response> {
-        match request.command.as_str() {
-            "list" => self.process_list(request),
-            "ping" => self.process_ping(request),
-            "cancel-uid" => self.process_cancel_uid(request),
-            "pretend-sign-in" => self.process_pseudo_sign_in(request),
-            "pretend-notify-id" => self.process_pseudo_notify_id(request),
-            _ => Err(ModuleManagementError {
-                error_type: ErrorType::UserCommandUnknown,
-                message: format!("Unknown command: {}\r\n", request.command),
-            }),
+    pub fn user_request(
+        &mut self,
+        request: &Request,
+        result_sender: Sender<OperationResult>,
+    ) -> Result<()> {
+        match request.operation {
+            Operation::List => self.process_list(request, result_sender),
+            Operation::Ping => self.process_ping(request, result_sender),
+            Operation::RequestUidCancel => self.process_cancel_uid_request(request, result_sender),
+            Operation::PretendSignIn => self.process_pseudo_sign_in(request, result_sender),
+            Operation::PretendNotifyId => self.process_pseudo_notify_id(request, result_sender),
+            Operation::Cancel => self.cancel_stream(request),
         }
     }
 
-    fn process_list(&mut self, request: &Request) -> Result<Response> {
-        let mut out = String::new();
+    fn conclude(&self, result_sender: &Sender<OperationResult>, response: Response) -> Result<()> {
+        result_sender.send(Ok(response)).unwrap();
+        return Ok(());
+    }
+
+    fn process_list(
+        &mut self,
+        _request: &Request,
+        result_sender: Sender<OperationResult>,
+    ) -> Result<()> {
+        let mut reply = String::new();
         for (id, module) in &self.modules_by_id {
-            if let Err(e) = write!(out, "0x{:02x}: 0x{:08x}\r\n", id, module.uid) {
+            if let Err(e) = write!(reply, "0x{:02x}: 0x{:08x}\r\n", id, module.uid) {
                 return Err(ModuleManagementError {
                     error_type: ErrorType::RuntimeError,
                     message: e.to_string(),
                 });
             }
         }
-        return Ok(Response {
-            client_id: request.client_id,
-            reply: Some(out),
-        });
+
+        return self.conclude(
+            &result_sender,
+            Response {
+                reply,
+                more: false,
+                stream_id: 0,
+            },
+        );
     }
 
-    fn process_ping(&mut self, request: &Request) -> Result<Response> {
-        let client_id = request.client_id;
-        let Param::U8(remote_id) = request.params[0] else {
+    fn get_next_stream_id(&mut self) -> u8 {
+        let next_stream_id = self.next_stream_id;
+        self.next_stream_id += 1;
+        // avoid stream_id = 0 which means "unassigned'
+        if self.next_stream_id == 0 {
+            self.next_stream_id = 1;
+        }
+        return next_stream_id;
+    }
+
+    fn process_ping(
+        &mut self,
+        request: &Request,
+        result_sender: Sender<OperationResult>,
+    ) -> Result<()> {
+        let RequestParam::U8(remote_id) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u8".to_string(),
             });
         };
 
-        let stream_id = self.next_stream_id;
-        self.next_stream_id += 1;
-        self.streams.insert(stream_id, client_id);
+        let stream_id = self.get_next_stream_id();
+        self.streams.insert(
+            stream_id,
+            Stream {
+                result_sender: Some(result_sender.clone()),
+                consume_reply: |message, sender_or_none| {
+                    log::info!("ping replied from: {:02x}", message.id());
+                    let id = message.id() - a3::A3_ID_INDIVIDUAL_MODULE_BASE;
+                    if let Some(sender) = sender_or_none {
+                        let ok: OperationResult = Ok(Response {
+                            reply: format!(" id 0x{:02x} replied\r\n", id),
+                            more: false,
+                            stream_id: 0,
+                        });
+                        if let Err(e) = sender.send(ok) {
+                            log::error!("Failed to send ping reply: {e:?}");
+                        }
+                    }
+                    return Ok(());
+                },
+            },
+        );
 
         self.ping(remote_id, stream_id)?;
 
-        return Ok(Response {
-            client_id: client_id,
-            reply: None,
-        });
+        return self.conclude(
+            &result_sender,
+            Response {
+                reply: format!("sent to id {:02x} ...", remote_id),
+                more: true,
+                stream_id,
+            },
+        );
     }
 
-    fn process_cancel_uid(&mut self, request: &Request) -> Result<Response> {
-        let client_id = request.client_id;
-        let Param::U32(remote_uid) = request.params[0] else {
+    fn process_cancel_uid_request(
+        &mut self,
+        request: &Request,
+        result_sender: Sender<OperationResult>,
+    ) -> Result<()> {
+        let RequestParam::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u32".to_string(),
             });
         };
-        let mut out = String::new();
+        let mut reply = String::new();
         if let Some(module) = self.modules_by_uid.remove(&remote_uid) {
             self.modules_by_id.remove(&module.id);
         } else {
             if let Err(e) = write!(
-                out,
+                reply,
                 "Warn: The uid 0x{:08x} not found in the module list, sending the message anyway\r\n",
                 remote_uid
             ) {
@@ -303,7 +362,7 @@ impl<'a> ModuleManager<'a> {
         }
         self.cancel_uid(remote_uid)?;
         if let Err(e) = write!(
-            out,
+            reply,
             "UID cancel request sent for uid {:08x}\r\n",
             remote_uid
         ) {
@@ -312,49 +371,83 @@ impl<'a> ModuleManager<'a> {
                 message: e.to_string(),
             });
         }
-        Ok(Response {
-            client_id: client_id,
-            reply: Some(out),
-        })
+        return self.conclude(
+            &result_sender,
+            Response {
+                reply,
+                more: false,
+                stream_id: 0,
+            },
+        );
     }
 
-    fn process_pseudo_sign_in(&mut self, request: &Request) -> Result<Response> {
-        let client_id = request.client_id;
-        let Param::U32(remote_uid) = request.params[0] else {
+    fn process_pseudo_sign_in(
+        &mut self,
+        request: &Request,
+        result_sender: Sender<OperationResult>,
+    ) -> Result<()> {
+        let RequestParam::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u32".to_string(),
             });
         };
         self.im_sign_in(remote_uid)?;
-        Ok(Response {
-            client_id: client_id,
-            reply: Some(format!("Sign-in sent as uid {:08x}\r\n", remote_uid)),
-        })
+        self.conclude(
+            &result_sender,
+            Response {
+                reply: format!("Sign-in sent as uid {:08x}\r\n", remote_uid),
+                more: false,
+                stream_id: 0,
+            },
+        )
     }
 
-    fn process_pseudo_notify_id(&mut self, request: &Request) -> Result<Response> {
-        let client_id = request.client_id;
-        let Param::U32(remote_uid) = request.params[0] else {
+    fn process_pseudo_notify_id(
+        &mut self,
+        request: &Request,
+        result_sender: Sender<OperationResult>,
+    ) -> Result<()> {
+        let RequestParam::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u32".to_string(),
             });
         };
-        let Param::U8(remote_id) = request.params[1] else {
+        let RequestParam::U8(remote_id) = request.params[1] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The second parameter should be of type u8".to_string(),
             });
         };
         self.im_notify_id(remote_uid, remote_id)?;
-        Ok(Response {
-            client_id: client_id,
-            reply: Some(format!(
-                "Notify ID sent as uid {:08x} id {:02x}\r\n",
-                remote_uid, remote_id
-            )),
-        })
+        self.conclude(
+            &result_sender,
+            Response {
+                reply: format!(
+                    "Notify ID sent as uid {:08x} id {:02x}\r\n",
+                    remote_uid, remote_id
+                ),
+                more: false,
+                stream_id: 0,
+            },
+        )
+    }
+
+    fn cancel_stream(&mut self, request: &Request) -> Result<()> {
+        let RequestParam::U8(stream_id) = request.params[0] else {
+            return Err(ModuleManagementError {
+                error_type: ErrorType::UserCommandInvalidRequest,
+                message: "The first parameter should be of type u8".to_string(),
+            });
+        };
+        let result = if let Some(_) = self.streams.remove(&stream_id) {
+            "success"
+        } else {
+            "not found"
+        };
+        log::debug!("Stream {} cancelled; result={}", stream_id, result);
+        return Ok(());
     }
 
     // Utilities /////////////////////////////////////////////////////
