@@ -22,7 +22,6 @@ pub enum RequestParam {
 #[derive(Debug)]
 pub struct Request {
     pub client_id: u32,
-    pub command: String,
     pub operation: Operation,
     pub params: Vec<RequestParam>,
 }

@@ -208,7 +208,6 @@ impl ClientHandler {
         }
         let request = Request {
             client_id: self.client_id,
-            command: command.to_string(),
             operation: operation,
             params: params,
         };
@@ -229,7 +228,6 @@ impl ClientHandler {
                 if stream_id > 0 {
                     let request = Request {
                         client_id: self.client_id,
-                        command: "cancel".to_string(),
                         operation: Operation::Cancel,
                         params: vec![RequestParam::U8(stream_id)],
                     };
