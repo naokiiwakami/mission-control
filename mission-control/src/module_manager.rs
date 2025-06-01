@@ -189,13 +189,16 @@ impl<'a> ModuleManager<'a> {
         return Ok(());
     }
 
-    fn ping(&self, remote_id: u8, stream_id: u8, enable_visual: u8) -> Result<()> {
+    fn ping(&self, remote_id: u8, stream_id: u8, enable_visual: bool) -> Result<()> {
         let mut out_message = self.create_message();
-        out_message.set_data_length(3);
+        let length = if enable_visual { 4 } else { 3 };
+        out_message.set_data_length(length);
         out_message.set_data(0, a3::A3_MC_PING);
         out_message.set_data(1, remote_id);
         out_message.set_data(2, stream_id);
-        out_message.set_data(3, enable_visual);
+        if enable_visual {
+            out_message.set_data(3, 1);
+        }
         self.can_controller.put_message(out_message);
         return Ok(());
     }
@@ -299,7 +302,7 @@ impl<'a> ModuleManager<'a> {
                 message: "The first parameter should be of type u8".to_string(),
             });
         };
-        let mut enable_visual = 0;
+        let mut enable_visual = false;
         if request.params.len() >= 2 {
             let RequestParam::Bool(enabled) = request.params[1] else {
                 return Err(ModuleManagementError {
@@ -307,7 +310,7 @@ impl<'a> ModuleManager<'a> {
                     message: "The second parameter should be of type bool".to_string(),
                 });
             };
-            enable_visual = if enabled { 1 } else { 0 };
+            enable_visual = enabled;
         };
 
         let stream_id = self.get_next_stream_id();
