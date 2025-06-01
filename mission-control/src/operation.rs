@@ -1,3 +1,5 @@
+use crate::module_manager::ModuleManagementError;
+
 #[derive(Debug)]
 pub enum Operation {
     List,
@@ -30,3 +32,5 @@ pub struct Response {
     pub client_id: u32,
     pub reply: Option<String>,
 }
+
+pub type OperationResult = Result<Response, ModuleManagementError>;

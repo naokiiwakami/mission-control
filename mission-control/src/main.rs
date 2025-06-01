@@ -6,10 +6,10 @@ pub mod module_manager;
 pub mod operation;
 
 use crate::can_controller::CanController;
-use crate::command_processor::{OperationResult, start_command_processor};
+use crate::command_processor::start_command_processor;
 use crate::event_type::EventType;
 use crate::module_manager::{ErrorType, ModuleManager};
-use crate::operation::Request;
+use crate::operation::{OperationResult, Request};
 use dashmap::DashMap;
 use env_logger::Env;
 use std::sync::Arc;
@@ -37,31 +37,15 @@ fn main() {
         match event_type {
             EventType::MessageRx => {
                 if let Some(message) = can_controller.get_message() {
-                    match module_manager.handle_message(message) {
-                        Ok(result_or_none) => {
-                            if let Some(result) = result_or_none {
-                                match result {
-                                    Ok(response) => {
-                                        if let Some(result_sender) =
-                                            result_senders.get(&response.client_id)
-                                        {
-                                            result_sender.send(Ok(response)).unwrap();
-                                        }
-                                    }
-                                    Err(e) => {
-                                        log::error!("Can message handling error; {e}");
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => match e.error_type {
+                    if let Err(e) = module_manager.handle_message(message) {
+                        match e.error_type {
                             ErrorType::A3OpCodeUnknown => {
                                 log::warn!("Can message handling failed; {e}");
                             }
                             _ => {
                                 log::error!("Can message handling error; {e}");
                             }
-                        },
+                        }
                     }
                 }
             }
@@ -69,10 +53,12 @@ fn main() {
             EventType::RequestSent => {
                 let request: Request = request_receiver.recv().unwrap();
                 match result_senders.get(&request.client_id) {
-                    Some(response_sender) => match module_manager.user_request(&request) {
-                        Ok(response) => response_sender.send(Ok(response)).unwrap(),
-                        Err(e) => response_sender.send(Err(e)).unwrap(),
-                    },
+                    Some(result_sender) => {
+                        match module_manager.user_request(&request, result_sender.clone()) {
+                            Ok(response) => result_sender.send(Ok(response)).unwrap(),
+                            Err(e) => result_sender.send(Err(e)).unwrap(),
+                        }
+                    }
                     None => {
                         log::error!("RequestSent: unknown client_id: {}", request.client_id);
                     }

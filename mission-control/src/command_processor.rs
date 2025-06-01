@@ -1,9 +1,7 @@
 use crate::event_type::EventType;
-use crate::module_manager::{ErrorType, ModuleManagementError};
-use crate::operation::{Operation, Request, RequestParam, Response};
+use crate::module_manager::ErrorType;
+use crate::operation::{Operation, OperationResult, Request, RequestParam};
 use dashmap::DashMap;
-// use std::fmt;
-// use std::fmt::Write;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::num::ParseIntError;
@@ -11,8 +9,6 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 use std::time::Duration;
-
-pub type OperationResult = Result<Response, ModuleManagementError>;
 
 struct ParseParamError {}
 

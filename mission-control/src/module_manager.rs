@@ -1,10 +1,10 @@
+use crate::analog3 as a3;
+use crate::can_controller::{CanController, CanMessage};
+use crate::operation::{Operation, OperationResult, Request, RequestParam, Response};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
-
-use crate::analog3 as a3;
-use crate::can_controller::{CanController, CanMessage};
-use crate::operation::{Operation, Request, RequestParam, Response};
+use std::sync::mpsc::Sender;
 
 #[derive(Debug, Clone)]
 pub enum ErrorType {
@@ -32,12 +32,18 @@ impl std::error::Error for ModuleManagementError {}
 
 type Result<T> = std::result::Result<T, ModuleManagementError>;
 
+#[derive(Debug, Clone)]
+struct Stream {
+    consume_reply: fn(&CanMessage, &Option<Sender<OperationResult>>) -> Result<()>,
+    result_sender: Option<Sender<OperationResult>>,
+}
+
 pub struct ModuleManager<'a> {
     can_controller: &'a CanController,
     modules_by_id: HashMap<u8, Module>,
     modules_by_uid: HashMap<u32, Module>,
     next_stream_id: u8,
-    streams: HashMap<u8, u32>,
+    streams: HashMap<u8, Stream>,
 }
 
 #[derive(Debug, Clone)]
@@ -149,10 +155,9 @@ impl<'a> ModuleManager<'a> {
         let stream_id = in_message.get_data(1);
         log::debug!("Ping reply received; id {remote_id:03x}");
         match self.streams.remove(&stream_id) {
-            Some(client_id) => Ok(Some(Ok(Response {
-                client_id: client_id,
-                reply: Some(" replied\r\n".to_string()),
-            }))),
+            Some(stream) => {
+                (stream.consume_reply)(&in_message, &stream.result_sender).and_then(|_| Ok(None))
+            }
             None => Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandStreamIdMissing,
                 message: format!("stream_id: {stream_id}"),
@@ -227,10 +232,14 @@ impl<'a> ModuleManager<'a> {
 
     // User command handling /////////////////////////////////////////////////////
 
-    pub fn user_request(&mut self, request: &Request) -> Result<Response> {
+    pub fn user_request(
+        &mut self,
+        request: &Request,
+        result_sender: Sender<OperationResult>,
+    ) -> Result<Response> {
         match request.operation {
             Operation::List => self.process_list(request),
-            Operation::Ping => self.process_ping(request),
+            Operation::Ping => self.process_ping(request, result_sender),
             Operation::RequestUidCancel => self.process_cancel_uid_request(request),
             Operation::PretendSignIn => self.process_pseudo_sign_in(request),
             Operation::PretendNotifyId => self.process_pseudo_notify_id(request),
@@ -257,7 +266,11 @@ impl<'a> ModuleManager<'a> {
         });
     }
 
-    fn process_ping(&mut self, request: &Request) -> Result<Response> {
+    fn process_ping(
+        &mut self,
+        request: &Request,
+        result_sender: Sender<OperationResult>,
+    ) -> Result<Response> {
         let client_id = request.client_id;
         let RequestParam::U8(remote_id) = request.params[0] else {
             return Err(ModuleManagementError {
@@ -268,7 +281,26 @@ impl<'a> ModuleManager<'a> {
 
         let stream_id = self.next_stream_id;
         self.next_stream_id += 1;
-        self.streams.insert(stream_id, client_id);
+        self.streams.insert(
+            stream_id,
+            Stream {
+                result_sender: Some(result_sender),
+                consume_reply: |message, sender_or_none| {
+                    log::info!("ping replied from: {:02x}", message.id());
+                    let id = message.id() - a3::A3_ID_INDIVIDUAL_MODULE_BASE;
+                    if let Some(sender) = sender_or_none {
+                        let ok: OperationResult = Ok(Response {
+                            client_id: 0,
+                            reply: Some(format!(" replied by id 0x{:02x}\r\n", id)),
+                        });
+                        if let Err(e) = sender.send(ok) {
+                            log::error!("Failed to send ping reply: {e:?}");
+                        }
+                    }
+                    return Ok(());
+                },
+            },
+        );
 
         self.ping(remote_id, stream_id)?;
 
