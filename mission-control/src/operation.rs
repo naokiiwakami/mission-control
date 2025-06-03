@@ -6,6 +6,7 @@ pub enum Operation {
     List,
     Ping,
     GetName,
+    AckName,
     RequestUidCancel,
     Cancel,
     // for testing and debugging
@@ -22,7 +23,7 @@ pub struct Request {
 
 #[derive(Debug)]
 pub struct Response {
-    pub reply: String,
+    pub reply: Vec<u8>,
     pub more: bool,
     /// non-zero ID would be returned when more is true
     pub stream_id: u8,

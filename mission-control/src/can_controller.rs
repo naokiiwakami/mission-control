@@ -203,6 +203,11 @@ impl CanController {
     /// boundary.put_message(message);
     /// ```
     pub fn put_message(&self, mut message: CanMessage) {
+        log::debug!(
+            "Sending message; id={:08x} opcode={:02x}",
+            message.id(),
+            message.get_data(0)
+        );
         // The CAN interface will take care of releasing the message.
         // We disconnect the C object from the Rust ecosystem here.
         message.detach();

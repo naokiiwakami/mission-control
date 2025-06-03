@@ -1,5 +1,5 @@
 use crate::analog3 as a3;
-use crate::analog3::{ChunkBuilder, Value};
+use crate::analog3::Value;
 use crate::can_controller::{CanController, CanMessage};
 use crate::operation::{Operation, OperationResult, Request, Response};
 use std::collections::HashMap;
@@ -37,7 +37,6 @@ type Result<T> = std::result::Result<T, ModuleManagementError>;
 #[derive(Debug, Clone)]
 struct Stream {
     consume_reply: fn(&CanMessage, &Stream) -> Result<()>,
-    chunk_builder: Option<ChunkBuilder>,
     result_sender: Option<Sender<OperationResult>>,
 }
 
@@ -170,7 +169,15 @@ impl<'a> ModuleManager<'a> {
     fn handle_name_reply(&mut self, in_message: CanMessage) -> Result<Option<Result<Response>>> {
         let remote_id = (in_message.id() - a3::A3_ID_INDIVIDUAL_MODULE_BASE) as u8;
         let stream_id = remote_id;
-        log::debug!("Name reply received; id {remote_id:03x}");
+        let mut data_dump = String::new();
+        for i in 0..in_message.data_length() as usize {
+            write!(data_dump, " {:02x}", in_message.data()[i]).unwrap();
+        }
+        log::debug!(
+            "Name reply received; id {:03x} data:{}",
+            remote_id,
+            data_dump
+        );
         match self.streams.get(&stream_id) {
             Some(mut stream) => {
                 (stream.consume_reply)(&in_message, &mut stream).and_then(|_| Ok(None))
@@ -278,7 +285,9 @@ impl<'a> ModuleManager<'a> {
         match request.operation {
             Operation::List => self.process_list(request, result_sender),
             Operation::Ping => self.process_ping(request, result_sender),
-            Operation::GetName => self.process_ping(request, result_sender),
+            Operation::GetName => self.process_get_name(request, result_sender),
+            Operation::AckName => self.process_ack_name(request),
+            // Operation::ContinueName => self.process_continue_name(request, result_sender),
             Operation::RequestUidCancel => self.process_cancel_uid_request(request, result_sender),
             Operation::PretendSignIn => self.process_pseudo_sign_in(request, result_sender),
             Operation::PretendNotifyId => self.process_pseudo_notify_id(request, result_sender),
@@ -318,7 +327,7 @@ impl<'a> ModuleManager<'a> {
         return self.complete(
             &result_sender,
             Response {
-                reply,
+                reply: reply.as_bytes().to_vec(),
                 more: false,
                 stream_id: 0,
             },
@@ -361,13 +370,12 @@ impl<'a> ModuleManager<'a> {
             stream_id,
             Stream {
                 result_sender: Some(result_sender.clone()),
-                chunk_builder: None,
                 consume_reply: |message, stream| {
                     log::info!("ping replied from: {:02x}", message.id());
                     let id = message.id() - a3::A3_ID_INDIVIDUAL_MODULE_BASE;
                     if let Some(sender) = &stream.result_sender {
                         let ok: OperationResult = Ok(Response {
-                            reply: format!(" id 0x{:02x} replied\r\n", id),
+                            reply: format!(" id 0x{:02x} replied\r\n", id).as_bytes().to_vec(),
                             more: false,
                             stream_id: 0,
                         });
@@ -385,14 +393,15 @@ impl<'a> ModuleManager<'a> {
         return self.complete(
             &result_sender,
             Response {
-                reply: format!("sent to id {:02x} ...", remote_id),
+                reply: format!("sent to id {:02x} ...", remote_id)
+                    .as_bytes()
+                    .to_vec(),
                 more: true,
                 stream_id,
             },
         );
     }
 
-    /*
     fn process_get_name(
         &mut self,
         request: &Request,
@@ -416,46 +425,22 @@ impl<'a> ModuleManager<'a> {
             stream_id,
             Stream {
                 result_sender: Some(result_sender.clone()),
-                chunk_builder: Some(ChunkBuilder::for_single_field()),
                 consume_reply: |message, stream| {
-                    log::debug!("name_reply from: {:02x}", message.id());
-                    let Some(builder) = stream.chunk_builder.as_mut() else {
-                        return Err(ModuleManagementError {
-                            error_type: ErrorType::RuntimeError,
-                            message: "chunk builder is not set".to_string(),
+                    let len = message.data_length() as usize;
+                    let mut data_dump = String::new();
+                    for i in 0..len {
+                        write!(data_dump, " {:02x}", message.data()[i]).unwrap();
+                    }
+                    log::debug!("handler receives:{}", data_dump);
+                    if let Some(sender) = &stream.result_sender {
+                        let ok: OperationResult = Ok(Response {
+                            reply: message.data()[0..len].to_vec(),
+                            more: false,
+                            stream_id: 0,
                         });
-                    };
-
-                    let is_done = builder
-                        .data(&message.data()[1..8], (message.data_length() - 1) as usize)
-                        .or(Err(ModuleManagementError {
-                            error_type: ErrorType::RuntimeError,
-                            message: format!("failed to parse name response"),
-                        }))?;
-
-                    if is_done {
-                        if let Some(sender) = &stream.result_sender {
-                            let chunk = builder.build().unwrap();
-                            let name =
-                                chunk[0]
-                                    .get_value_as_string()
-                                    .or(Err(ModuleManagementError {
-                                        error_type: ErrorType::RuntimeError,
-                                        message: format!("failed to fetch name value"),
-                                    }))?;
-
-                            let ok: OperationResult = Ok(Response {
-                                reply: format!(" ok\r\nname = {}\r\n", name),
-                                more: false,
-                                stream_id: 0,
-                            });
-                            if let Err(e) = sender.send(ok) {
-                                log::error!("Failed to send name reply: {e:?}");
-                            }
+                        if let Err(e) = sender.send(ok) {
+                            log::error!("Failed to send ping reply: {e:?}");
                         }
-                    } else {
-                        let remote_id = message.id() - a3::A3_ID_INDIVIDUAL_MODULE_BASE;
-                        myself.continue_name(remote_id as u8)?;
                     }
                     return Ok(());
                 },
@@ -464,16 +449,34 @@ impl<'a> ModuleManager<'a> {
 
         self.request_name(remote_id)?;
 
-        return self.complete(
-            &result_sender,
-            Response {
-                reply: format!("sent to id {:02x} ...", remote_id),
-                more: true,
-                stream_id,
-            },
-        );
+        return Ok(());
     }
-    */
+
+    fn process_ack_name(&mut self, request: &Request) -> Result<()> {
+        let Value::U8(remote_id) = request.params[0] else {
+            return Err(ModuleManagementError {
+                error_type: ErrorType::UserCommandInvalidRequest,
+                message: "The first parameter should be of type u8".to_string(),
+            });
+        };
+        let Value::Bool(is_done) = request.params[1] else {
+            return Err(ModuleManagementError {
+                error_type: ErrorType::UserCommandInvalidRequest,
+                message: "The second parameter should be of type bool".to_string(),
+            });
+        };
+        log::debug!("ack_name: id={}, done={}", remote_id, is_done);
+
+        let stream_id = remote_id;
+
+        if is_done {
+            self.streams.remove(&stream_id);
+        } else {
+            self.continue_name(remote_id)?;
+        }
+
+        return Ok(());
+    }
 
     fn process_cancel_uid_request(
         &mut self,
@@ -515,7 +518,7 @@ impl<'a> ModuleManager<'a> {
         return self.complete(
             &result_sender,
             Response {
-                reply,
+                reply: reply.as_bytes().to_vec(),
                 more: false,
                 stream_id: 0,
             },
@@ -537,7 +540,9 @@ impl<'a> ModuleManager<'a> {
         self.complete(
             &result_sender,
             Response {
-                reply: format!("Sign-in sent as uid {:08x}\r\n", remote_uid),
+                reply: format!("Sign-in sent as uid {:08x}\r\n", remote_uid)
+                    .as_bytes()
+                    .to_vec(),
                 more: false,
                 stream_id: 0,
             },
@@ -568,7 +573,9 @@ impl<'a> ModuleManager<'a> {
                 reply: format!(
                     "Notify ID sent as uid {:08x} id {:02x}\r\n",
                     remote_uid, remote_id
-                ),
+                )
+                .as_bytes()
+                .to_vec(),
                 more: false,
                 stream_id: 0,
             },
