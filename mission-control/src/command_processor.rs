@@ -1,6 +1,7 @@
+use crate::analog3::Value;
 use crate::event_type::EventType;
 use crate::module_manager::ErrorType;
-use crate::operation::{Operation, OperationResult, Request, RequestParam};
+use crate::operation::{Operation, OperationResult, Request};
 use dashmap::DashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -14,7 +15,7 @@ struct ParseParamError {}
 struct Spec {
     name: String,
     required: bool,
-    parse: fn(&String) -> Result<RequestParam, ParseParamError>,
+    parse: fn(&String) -> Result<Value, ParseParamError>,
 }
 
 impl Spec {
@@ -32,7 +33,7 @@ impl Spec {
                     }
                 };
                 return match parse_u8() {
-                    Ok(value) => Ok(RequestParam::U8(value)),
+                    Ok(value) => Ok(Value::U8(value)),
                     Err(_) => Err(ParseParamError {}),
                 };
             },
@@ -54,7 +55,7 @@ impl Spec {
                     }
                 };
                 return match parse_16() {
-                    Ok(value) => Ok(RequestParam::U16(value)),
+                    Ok(value) => Ok(Value::U16(value)),
                     Err(_) => Err(ParseParamError {}),
                 };
             },
@@ -75,7 +76,7 @@ impl Spec {
                     }
                 };
                 return match parse_16() {
-                    Ok(value) => Ok(RequestParam::U32(value)),
+                    Ok(value) => Ok(Value::U32(value)),
                     Err(_) => Err(ParseParamError {}),
                 };
             },
@@ -87,7 +88,7 @@ impl Spec {
         Self {
             name: name,
             required: required,
-            parse: |src| Ok(RequestParam::Text(src.trim().to_string())),
+            parse: |src| Ok(Value::Text(src.trim().to_string())),
         }
     }
 
@@ -97,7 +98,7 @@ impl Spec {
             required: required,
             parse: |src| {
                 return match src.trim().parse() {
-                    Ok(value) => Ok(RequestParam::Bool(value)),
+                    Ok(value) => Ok(Value::Bool(value)),
                     Err(_) => Err(ParseParamError {}),
                 };
             },
@@ -147,6 +148,12 @@ impl ClientHandler {
                             &tokens,
                             &vec![Spec::u8("id", true), Spec::bool("visual", false)],
                         )?,
+                        "get-name" => self.process(
+                            &command,
+                            Operation::GetName,
+                            &tokens,
+                            &vec![Spec::u8("id", true)],
+                        )?,
                         "cancel-uid" => self.process(
                             &command,
                             Operation::RequestUidCancel,
@@ -173,8 +180,9 @@ impl ClientHandler {
                             // do nothing
                         }
                         _ => {
-                            self.stream
-                                .write_all(format!("{}: Unknown command", command).as_bytes())?;
+                            self.stream.write_all(
+                                format!("{}: Unknown command\r\n", command).as_bytes(),
+                            )?;
                         }
                     }
                 }
@@ -245,7 +253,7 @@ impl ClientHandler {
                     let request = Request {
                         client_id: self.client_id,
                         operation: Operation::Cancel,
-                        params: vec![RequestParam::U8(stream_id)],
+                        params: vec![Value::U8(stream_id)],
                     };
                     self.request_sender.send(request).unwrap();
                     self.notifier.send(EventType::RequestSent).unwrap();
@@ -269,12 +277,14 @@ impl ClientHandler {
                 }
             }
             Err(e) => match e.error_type {
-                ErrorType::UserCommandUnknown => self.stream.write_all(e.message.as_bytes())?,
-                _ => {
+                ErrorType::RuntimeError => {
                     log::error!("Command execution error: {e:?}");
                     self.stream
                         .write_all(b"An internal error encountered. Check the log.\r\n")?;
                 }
+                _ => self
+                    .stream
+                    .write_all(format!("{}\r\n", e.message).as_bytes())?,
             },
         };
         return Ok(());

@@ -79,6 +79,12 @@ impl CanMessage {
         }
     }
 
+    pub fn data(&self) -> [u8; 8usize] {
+        unsafe {
+            return (*self.message).data;
+        }
+    }
+
     /// Detach the inside message after its ownership is moved
     /// into the C can-controller library.
     pub fn detach(&mut self) {

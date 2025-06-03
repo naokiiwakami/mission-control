@@ -1,9 +1,11 @@
+use crate::analog3::Value;
 use crate::module_manager::ModuleManagementError;
 
 #[derive(Debug)]
 pub enum Operation {
     List,
     Ping,
+    GetName,
     RequestUidCancel,
     Cancel,
     // for testing and debugging
@@ -12,19 +14,10 @@ pub enum Operation {
 }
 
 #[derive(Debug)]
-pub enum RequestParam {
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    Text(String),
-    Bool(bool),
-}
-
-#[derive(Debug)]
 pub struct Request {
     pub client_id: u32,
     pub operation: Operation,
-    pub params: Vec<RequestParam>,
+    pub params: Vec<Value>,
 }
 
 #[derive(Debug)]

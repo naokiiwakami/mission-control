@@ -1,6 +1,7 @@
 use crate::analog3 as a3;
+use crate::analog3::{ChunkBuilder, Value};
 use crate::can_controller::{CanController, CanMessage};
-use crate::operation::{Operation, OperationResult, Request, RequestParam, Response};
+use crate::operation::{Operation, OperationResult, Request, Response};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
@@ -10,6 +11,7 @@ use std::sync::mpsc::Sender;
 pub enum ErrorType {
     A3OpCodeUnknown,
     A3OpCodeMissing,
+    A3StreamConflict,
     UserCommandUnknown,
     UserCommandStreamIdMissing,
     UserCommandInvalidRequest,
@@ -34,7 +36,8 @@ type Result<T> = std::result::Result<T, ModuleManagementError>;
 
 #[derive(Debug, Clone)]
 struct Stream {
-    consume_reply: fn(&CanMessage, &Option<Sender<OperationResult>>) -> Result<()>,
+    consume_reply: fn(&CanMessage, &Stream) -> Result<()>,
+    chunk_builder: Option<ChunkBuilder>,
     result_sender: Option<Sender<OperationResult>>,
 }
 
@@ -42,7 +45,6 @@ pub struct ModuleManager<'a> {
     can_controller: &'a CanController,
     modules_by_id: HashMap<u8, Module>,
     modules_by_uid: HashMap<u32, Module>,
-    next_stream_id: u8,
     streams: HashMap<u8, Stream>,
 }
 
@@ -58,7 +60,6 @@ impl<'a> ModuleManager<'a> {
             can_controller,
             modules_by_uid: HashMap::new(),
             modules_by_id: HashMap::new(),
-            next_stream_id: 1,
             streams: HashMap::new(),
         };
         new_instance.sign_in()?;
@@ -89,6 +90,7 @@ impl<'a> ModuleManager<'a> {
         }
         return match opcode {
             a3::A3_IM_REPLY_PING => self.handle_ping_reply(message),
+            a3::A3_IM_REPLY_NAME => self.handle_name_reply(message),
             _ => {
                 return Err(ModuleManagementError {
                     error_type: ErrorType::A3OpCodeUnknown,
@@ -152,11 +154,26 @@ impl<'a> ModuleManager<'a> {
 
     fn handle_ping_reply(&mut self, in_message: CanMessage) -> Result<Option<Result<Response>>> {
         let remote_id = in_message.id();
-        let stream_id = in_message.get_data(1);
+        let stream_id = (remote_id - a3::A3_ID_INDIVIDUAL_MODULE_BASE) as u8;
         log::debug!("Ping reply received; id {remote_id:03x}");
         match self.streams.remove(&stream_id) {
-            Some(stream) => {
-                (stream.consume_reply)(&in_message, &stream.result_sender).and_then(|_| Ok(None))
+            Some(mut stream) => {
+                (stream.consume_reply)(&in_message, &mut stream).and_then(|_| Ok(None))
+            }
+            None => Err(ModuleManagementError {
+                error_type: ErrorType::UserCommandStreamIdMissing,
+                message: format!("stream_id: {stream_id}"),
+            }),
+        }
+    }
+
+    fn handle_name_reply(&mut self, in_message: CanMessage) -> Result<Option<Result<Response>>> {
+        let remote_id = (in_message.id() - a3::A3_ID_INDIVIDUAL_MODULE_BASE) as u8;
+        let stream_id = remote_id;
+        log::debug!("Name reply received; id {remote_id:03x}");
+        match self.streams.get(&stream_id) {
+            Some(mut stream) => {
+                (stream.consume_reply)(&in_message, &mut stream).and_then(|_| Ok(None))
             }
             None => Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandStreamIdMissing,
@@ -189,16 +206,33 @@ impl<'a> ModuleManager<'a> {
         return Ok(());
     }
 
-    fn ping(&self, remote_id: u8, stream_id: u8, enable_visual: bool) -> Result<()> {
+    fn ping(&self, remote_id: u8, enable_visual: bool) -> Result<()> {
         let mut out_message = self.create_message();
-        let length = if enable_visual { 4 } else { 3 };
+        let length = if enable_visual { 3 } else { 2 };
         out_message.set_data_length(length);
         out_message.set_data(0, a3::A3_MC_PING);
         out_message.set_data(1, remote_id);
-        out_message.set_data(2, stream_id);
         if enable_visual {
-            out_message.set_data(3, 1);
+            out_message.set_data(2, 1);
         }
+        self.can_controller.put_message(out_message);
+        return Ok(());
+    }
+
+    fn request_name(&self, remote_id: u8) -> Result<()> {
+        let mut out_message = self.create_message();
+        out_message.set_data_length(2);
+        out_message.set_data(0, a3::A3_MC_REQUEST_NAME);
+        out_message.set_data(1, remote_id);
+        self.can_controller.put_message(out_message);
+        return Ok(());
+    }
+
+    fn continue_name(&self, remote_id: u8) -> Result<()> {
+        let mut out_message = self.create_message();
+        out_message.set_data_length(2);
+        out_message.set_data(0, a3::A3_MC_CONTINUE_NAME);
+        out_message.set_data(1, remote_id);
         self.can_controller.put_message(out_message);
         return Ok(());
     }
@@ -244,6 +278,7 @@ impl<'a> ModuleManager<'a> {
         match request.operation {
             Operation::List => self.process_list(request, result_sender),
             Operation::Ping => self.process_ping(request, result_sender),
+            Operation::GetName => self.process_ping(request, result_sender),
             Operation::RequestUidCancel => self.process_cancel_uid_request(request, result_sender),
             Operation::PretendSignIn => self.process_pseudo_sign_in(request, result_sender),
             Operation::PretendNotifyId => self.process_pseudo_notify_id(request, result_sender),
@@ -251,8 +286,17 @@ impl<'a> ModuleManager<'a> {
         }
     }
 
-    fn conclude(&self, result_sender: &Sender<OperationResult>, response: Response) -> Result<()> {
+    fn complete(&self, result_sender: &Sender<OperationResult>, response: Response) -> Result<()> {
         result_sender.send(Ok(response)).unwrap();
+        return Ok(());
+    }
+
+    fn complete_exceptionally(
+        &self,
+        result_sender: &Sender<OperationResult>,
+        error: ModuleManagementError,
+    ) -> Result<()> {
+        result_sender.send(Err(error)).unwrap();
         return Ok(());
     }
 
@@ -271,7 +315,7 @@ impl<'a> ModuleManager<'a> {
             }
         }
 
-        return self.conclude(
+        return self.complete(
             &result_sender,
             Response {
                 reply,
@@ -281,22 +325,12 @@ impl<'a> ModuleManager<'a> {
         );
     }
 
-    fn get_next_stream_id(&mut self) -> u8 {
-        let next_stream_id = self.next_stream_id;
-        self.next_stream_id += 1;
-        // avoid stream_id = 0 which means "unassigned'
-        if self.next_stream_id == 0 {
-            self.next_stream_id = 1;
-        }
-        return next_stream_id;
-    }
-
     fn process_ping(
         &mut self,
         request: &Request,
         result_sender: Sender<OperationResult>,
     ) -> Result<()> {
-        let RequestParam::U8(remote_id) = request.params[0] else {
+        let Value::U8(remote_id) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u8".to_string(),
@@ -304,7 +338,7 @@ impl<'a> ModuleManager<'a> {
         };
         let mut enable_visual = false;
         if request.params.len() >= 2 {
-            let RequestParam::Bool(enabled) = request.params[1] else {
+            let Value::Bool(enabled) = request.params[1] else {
                 return Err(ModuleManagementError {
                     error_type: ErrorType::UserCommandInvalidRequest,
                     message: "The second parameter should be of type bool".to_string(),
@@ -313,15 +347,25 @@ impl<'a> ModuleManager<'a> {
             enable_visual = enabled;
         };
 
-        let stream_id = self.get_next_stream_id();
+        let stream_id = remote_id;
+        if self.streams.contains_key(&stream_id) {
+            return self.complete_exceptionally(
+                &result_sender,
+                ModuleManagementError {
+                    error_type: ErrorType::A3StreamConflict,
+                    message: format!("Another ping for 0x{:02x} is ongoing", remote_id),
+                },
+            );
+        }
         self.streams.insert(
             stream_id,
             Stream {
                 result_sender: Some(result_sender.clone()),
-                consume_reply: |message, sender_or_none| {
+                chunk_builder: None,
+                consume_reply: |message, stream| {
                     log::info!("ping replied from: {:02x}", message.id());
                     let id = message.id() - a3::A3_ID_INDIVIDUAL_MODULE_BASE;
-                    if let Some(sender) = sender_or_none {
+                    if let Some(sender) = &stream.result_sender {
                         let ok: OperationResult = Ok(Response {
                             reply: format!(" id 0x{:02x} replied\r\n", id),
                             more: false,
@@ -336,9 +380,9 @@ impl<'a> ModuleManager<'a> {
             },
         );
 
-        self.ping(remote_id, stream_id, enable_visual)?;
+        self.ping(remote_id, enable_visual)?;
 
-        return self.conclude(
+        return self.complete(
             &result_sender,
             Response {
                 reply: format!("sent to id {:02x} ...", remote_id),
@@ -348,12 +392,95 @@ impl<'a> ModuleManager<'a> {
         );
     }
 
+    /*
+    fn process_get_name(
+        &mut self,
+        request: &Request,
+        result_sender: Sender<OperationResult>,
+    ) -> Result<()> {
+        let Value::U8(remote_id) = request.params[0] else {
+            return Err(ModuleManagementError {
+                error_type: ErrorType::UserCommandInvalidRequest,
+                message: "The first parameter should be of type u8".to_string(),
+            });
+        };
+
+        let stream_id = remote_id;
+        if self.streams.contains_key(&stream_id) {
+            return Err(ModuleManagementError {
+                error_type: ErrorType::A3StreamConflict,
+                message: format!("Another ping for 0x{:02x} is ongoing", remote_id),
+            });
+        }
+        self.streams.insert(
+            stream_id,
+            Stream {
+                result_sender: Some(result_sender.clone()),
+                chunk_builder: Some(ChunkBuilder::for_single_field()),
+                consume_reply: |message, stream| {
+                    log::debug!("name_reply from: {:02x}", message.id());
+                    let Some(builder) = stream.chunk_builder.as_mut() else {
+                        return Err(ModuleManagementError {
+                            error_type: ErrorType::RuntimeError,
+                            message: "chunk builder is not set".to_string(),
+                        });
+                    };
+
+                    let is_done = builder
+                        .data(&message.data()[1..8], (message.data_length() - 1) as usize)
+                        .or(Err(ModuleManagementError {
+                            error_type: ErrorType::RuntimeError,
+                            message: format!("failed to parse name response"),
+                        }))?;
+
+                    if is_done {
+                        if let Some(sender) = &stream.result_sender {
+                            let chunk = builder.build().unwrap();
+                            let name =
+                                chunk[0]
+                                    .get_value_as_string()
+                                    .or(Err(ModuleManagementError {
+                                        error_type: ErrorType::RuntimeError,
+                                        message: format!("failed to fetch name value"),
+                                    }))?;
+
+                            let ok: OperationResult = Ok(Response {
+                                reply: format!(" ok\r\nname = {}\r\n", name),
+                                more: false,
+                                stream_id: 0,
+                            });
+                            if let Err(e) = sender.send(ok) {
+                                log::error!("Failed to send name reply: {e:?}");
+                            }
+                        }
+                    } else {
+                        let remote_id = message.id() - a3::A3_ID_INDIVIDUAL_MODULE_BASE;
+                        myself.continue_name(remote_id as u8)?;
+                    }
+                    return Ok(());
+                },
+            },
+        );
+
+        self.request_name(remote_id)?;
+
+        return self.complete(
+            &result_sender,
+            Response {
+                reply: format!("sent to id {:02x} ...", remote_id),
+                more: true,
+                stream_id,
+            },
+        );
+    }
+    */
+
     fn process_cancel_uid_request(
         &mut self,
         request: &Request,
         result_sender: Sender<OperationResult>,
     ) -> Result<()> {
-        let RequestParam::U32(remote_uid) = request.params[0] else {
+        let Value::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u32".to_string(),
@@ -385,7 +512,7 @@ impl<'a> ModuleManager<'a> {
                 message: e.to_string(),
             });
         }
-        return self.conclude(
+        return self.complete(
             &result_sender,
             Response {
                 reply,
@@ -400,14 +527,14 @@ impl<'a> ModuleManager<'a> {
         request: &Request,
         result_sender: Sender<OperationResult>,
     ) -> Result<()> {
-        let RequestParam::U32(remote_uid) = request.params[0] else {
+        let Value::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u32".to_string(),
             });
         };
         self.im_sign_in(remote_uid)?;
-        self.conclude(
+        self.complete(
             &result_sender,
             Response {
                 reply: format!("Sign-in sent as uid {:08x}\r\n", remote_uid),
@@ -422,20 +549,20 @@ impl<'a> ModuleManager<'a> {
         request: &Request,
         result_sender: Sender<OperationResult>,
     ) -> Result<()> {
-        let RequestParam::U32(remote_uid) = request.params[0] else {
+        let Value::U32(remote_uid) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u32".to_string(),
             });
         };
-        let RequestParam::U8(remote_id) = request.params[1] else {
+        let Value::U8(remote_id) = request.params[1] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The second parameter should be of type u8".to_string(),
             });
         };
         self.im_notify_id(remote_uid, remote_id)?;
-        self.conclude(
+        self.complete(
             &result_sender,
             Response {
                 reply: format!(
@@ -449,7 +576,7 @@ impl<'a> ModuleManager<'a> {
     }
 
     fn cancel_stream(&mut self, request: &Request) -> Result<()> {
-        let RequestParam::U8(stream_id) = request.params[0] else {
+        let Value::U8(stream_id) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
                 message: "The first parameter should be of type u8".to_string(),
