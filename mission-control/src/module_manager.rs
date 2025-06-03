@@ -589,12 +589,14 @@ impl<'a> ModuleManager<'a> {
                 message: "The first parameter should be of type u8".to_string(),
             });
         };
-        let result = if let Some(_) = self.streams.remove(&stream_id) {
-            "success"
-        } else {
-            "not found"
-        };
-        log::debug!("Stream {} cancelled; result={}", stream_id, result);
+        if log::log_enabled!(log::Level::Debug) {
+            let result = if self.streams.remove(&stream_id).is_none() {
+                "not found"
+            } else {
+                "success"
+            };
+            log::debug!("Stream {} cancelled; result={}", stream_id, result);
+        }
         return Ok(());
     }
 

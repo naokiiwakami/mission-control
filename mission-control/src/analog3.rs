@@ -145,6 +145,12 @@ impl std::error::Error for DataParsingError {}
 
 type Result<T> = std::result::Result<T, DataParsingError>;
 
+fn error<T>(message: &str) -> Result<T> {
+    return Err(DataParsingError {
+        message: String::from(message),
+    });
+}
+
 #[derive(Debug, Clone)]
 pub struct DataFieldBuilder {
     // data_field: Option<DataField>,
@@ -170,14 +176,10 @@ impl DataFieldBuilder {
 
     pub fn data(&mut self, data: &[u8], length: usize, offset: usize) -> Result<(bool, usize)> {
         if self.length_read && self.data_pos == self.length as usize {
-            return Err(DataParsingError {
-                message: String::from("Building is done already"),
-            });
+            return error("DataFieldBuilder: Data overflow");
         }
         let Some(acc_data) = &mut self.data.as_mut() else {
-            return Err(DataParsingError {
-                message: String::from("Data field is not set"),
-            });
+            return error("DataFieldBuilder: Built already. The build cannot be used twice.");
         };
         let mut index = offset;
         if !self.id_read {
@@ -206,9 +208,7 @@ impl DataFieldBuilder {
 
     pub fn build(&mut self) -> Result<DataField> {
         if self.data_pos < self.length as usize {
-            return Err(DataParsingError {
-                message: String::from("Not yet ready to build"),
-            });
+            return error("DataFieldBuilder: The builder is not ready to build yet");
         }
         if let Some(data) = self.data.take() {
             return Ok(DataField {
@@ -217,9 +217,7 @@ impl DataFieldBuilder {
                 data,
             });
         }
-        return Err(DataParsingError {
-            message: String::from("Data field is not set"),
-        });
+        return error("Data field is not set");
     }
 }
 
@@ -250,14 +248,10 @@ impl ChunkBuilder {
 
     pub fn data(&mut self, data: &[u8], data_length: usize) -> Result<bool> {
         let Some(chunk) = self.chunk.as_mut() else {
-            return Err(DataParsingError {
-                message: String::from("Chunk field is not set"),
-            });
+            return error("ChunkBuilder: Built already. The build cannot be used twice.");
         };
         if self.num_fields_read && chunk.len() == self.target_num_fields {
-            return Err(DataParsingError {
-                message: String::from("Building is done already"),
-            });
+            return error("ChunkBuilder: Data overflow.");
         }
 
         let mut index = 0;
@@ -279,14 +273,10 @@ impl ChunkBuilder {
 
     pub fn build(&mut self) -> Result<Vec<DataField>> {
         let Some(chunk) = self.chunk.as_ref() else {
-            return Err(DataParsingError {
-                message: String::from("Chunk field is not set"),
-            });
+            return error("ChunkBuilder: build() method cannot be called twice.");
         };
         if !self.num_fields_read || chunk.len() < self.target_num_fields {
-            return Err(DataParsingError {
-                message: String::from("Not yet ready to build"),
-            });
+            return error("ChunkBuilder: The builder is not ready for generating the chunk.");
         }
         return Ok(self.chunk.take().unwrap());
     }
