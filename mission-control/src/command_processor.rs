@@ -149,6 +149,7 @@ impl ClientHandler {
                             &vec![Spec::u8("id", true), Spec::bool("visual", false)],
                         )?,
                         "get-name" => self.get_name(&command, &tokens)?,
+                        "get-config" => self.get_config(&command, &tokens)?,
                         "cancel-uid" => self.process(
                             &command,
                             Operation::RequestUidCancel,
@@ -399,6 +400,169 @@ impl ClientHandler {
                         if is_done {
                             let chunk = chunk_builder.build().unwrap();
                             let name = chunk[0].get_value_as_string().unwrap();
+                            let reply = format!("name = {}\r\n", name);
+                            self.stream.write_all(reply.as_bytes())?;
+                        }
+                        return Ok(is_done);
+                    }
+                    Err(e) => {
+                        log::error!("GetName: Data parsing failed: {:?}", e);
+                        self.stream
+                            .write_all(b"ERROR in parsing received data. Check the log file\r\n")?;
+                        return Ok(true);
+                    }
+                }
+            }
+            Err(e) => match e.error_type {
+                ErrorType::RuntimeError => {
+                    log::error!("Command execution error: {e:?}");
+                    self.stream
+                        .write_all(b"An internal error encountered. Check the log.\r\n")?;
+                }
+                _ => self
+                    .stream
+                    .write_all(format!("{}\r\n", e.message).as_bytes())?,
+            },
+        };
+        return Ok(true);
+    }
+
+    fn get_params(
+        &mut self,
+        command: &str,
+        tokens: &Vec<String>,
+        specs: &Vec<Spec>,
+    ) -> std::io::Result<Option<Vec<Value>>> {
+        let mut params = Vec::new();
+        for (i, spec) in specs.iter().enumerate() {
+            if tokens.len() <= i + 1 {
+                if spec.required {
+                    self.usage(command, &specs)?;
+                    return Ok(None);
+                }
+                break;
+            }
+            if let Ok(param) = (spec.parse)(&tokens[i + 1]) {
+                params.push(param);
+            } else {
+                self.stream
+                    .write_all(format!("Invalid {}\r\n", spec.name).as_bytes())?;
+                return Ok(None);
+            }
+        }
+        return Ok(Some(params));
+    }
+
+    fn get_config(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        self.handle_stream(command, tokens, Operation::GetConfig, Operation::AckConfig)
+    }
+
+    fn handle_stream(
+        &mut self,
+        command: &str,
+        tokens: &Vec<String>,
+        request_op: Operation,
+        ack_op: Operation,
+    ) -> std::io::Result<()> {
+        // build the request
+        let specs = vec![Spec::u8("id", true)];
+        let Some(params) = self.get_params(command, tokens, &specs)? else {
+            return Ok(());
+        };
+        let Value::U8(remote_id) = params[0] else {
+            self.stream
+                .write_all(b"something went wrong, remote ID not found in params\r\n")?;
+            return Ok(());
+        };
+
+        let request = Request {
+            client_id: self.client_id,
+            operation: request_op,
+            params,
+        };
+
+        // send the request
+        self.request_sender.send(request).unwrap();
+        self.notifier.send(EventType::RequestSent).unwrap();
+
+        let mut chunk_builder = ChunkBuilder::new();
+        return self.handle_result_for_stream(remote_id, &mut chunk_builder, ack_op);
+    }
+
+    fn handle_result_for_stream(
+        &mut self,
+        remote_id: u8,
+        chunk_builder: &mut ChunkBuilder,
+        ack_op: Operation,
+    ) -> std::io::Result<()> {
+        loop {
+            let recv_result = self.result_receiver.recv_timeout(Duration::from_secs(10));
+            match recv_result {
+                Ok(operation_result) => {
+                    let is_done =
+                        self.handle_result_inner_for_stream(operation_result, chunk_builder)?;
+                    let request = Request {
+                        client_id: self.client_id,
+                        operation: ack_op.clone(),
+                        params: vec![Value::U8(remote_id), Value::Bool(is_done)],
+                    };
+                    self.request_sender.send(request).unwrap();
+                    self.notifier.send(EventType::RequestSent).unwrap();
+                    if is_done {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    self.stream.write_all(b" timeout\r\n")?;
+                    if remote_id > 0 {
+                        let request = Request {
+                            client_id: self.client_id,
+                            operation: Operation::AckName,
+                            params: vec![Value::U8(remote_id), Value::Bool(true)],
+                        };
+                        self.request_sender.send(request).unwrap();
+                        self.notifier.send(EventType::RequestSent).unwrap();
+                    }
+                    break;
+                }
+                Err(e) => {
+                    log::error!("Command execution error: {e:?}");
+                    self.stream.write_all(b"\r\nINTERNAL ERROR!\r\n")?;
+                    break;
+                }
+            };
+        }
+        return Ok(());
+    }
+
+    fn handle_result_inner_for_stream(
+        &mut self,
+        operation_result: OperationResult,
+        chunk_builder: &mut ChunkBuilder,
+    ) -> std::io::Result<bool> {
+        match operation_result {
+            Ok(response) => {
+                let reply = &response.reply;
+                let size = reply.len();
+                let mut data_dump = String::new();
+                for i in 0..size {
+                    data_dump += format!(" {:02x}", reply.as_slice()[i]).as_str();
+                }
+                log::debug!("processor receives:{}", data_dump);
+
+                if size < 2 {
+                    log::error!("Empty data has come");
+                    self.stream.write_all(
+                        b"Received a message with empty data, something is wrong...\r\n",
+                    )?;
+                    return Ok(true);
+                }
+
+                match chunk_builder.data(&reply.as_slice()[1..size], size - 1) {
+                    Ok(is_done) => {
+                        if is_done {
+                            let chunk = chunk_builder.build().unwrap();
+                            let name = chunk[2].get_value_as_string().unwrap();
                             let reply = format!("name = {}\r\n", name);
                             self.stream.write_all(reply.as_bytes())?;
                         }

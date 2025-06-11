@@ -90,6 +90,7 @@ impl<'a> ModuleManager<'a> {
         return match opcode {
             a3::A3_IM_REPLY_PING => self.handle_ping_reply(message),
             a3::A3_IM_REPLY_NAME => self.handle_name_reply(message),
+            a3::A3_IM_REPLY_CONFIG => self.handle_name_reply(message),
             _ => {
                 return Err(ModuleManagementError {
                     error_type: ErrorType::A3OpCodeUnknown,
@@ -226,19 +227,10 @@ impl<'a> ModuleManager<'a> {
         return Ok(());
     }
 
-    fn request_name(&self, remote_id: u8) -> Result<()> {
+    fn send_op_and_id(&self, opcode: u8, remote_id: u8) -> Result<()> {
         let mut out_message = self.create_message();
         out_message.set_data_length(2);
-        out_message.set_data(0, a3::A3_MC_REQUEST_NAME);
-        out_message.set_data(1, remote_id);
-        self.can_controller.put_message(out_message);
-        return Ok(());
-    }
-
-    fn continue_name(&self, remote_id: u8) -> Result<()> {
-        let mut out_message = self.create_message();
-        out_message.set_data_length(2);
-        out_message.set_data(0, a3::A3_MC_CONTINUE_NAME);
+        out_message.set_data(0, opcode);
         out_message.set_data(1, remote_id);
         self.can_controller.put_message(out_message);
         return Ok(());
@@ -285,9 +277,14 @@ impl<'a> ModuleManager<'a> {
         match request.operation {
             Operation::List => self.process_list(request, result_sender),
             Operation::Ping => self.process_ping(request, result_sender),
-            Operation::GetName => self.process_get_name(request, result_sender),
-            Operation::AckName => self.process_ack_name(request),
-            // Operation::ContinueName => self.process_continue_name(request, result_sender),
+            Operation::GetName => {
+                self.process_stream(request, a3::A3_MC_REQUEST_NAME, result_sender)
+            }
+            Operation::AckName => self.process_ack_stream(request, a3::A3_MC_CONTINUE_NAME),
+            Operation::GetConfig => {
+                self.process_stream(request, a3::A3_MC_REQUEST_CONFIG, result_sender)
+            }
+            Operation::AckConfig => self.process_ack_stream(request, a3::A3_MC_CONTINUE_CONFIG),
             Operation::RequestUidCancel => self.process_cancel_uid_request(request, result_sender),
             Operation::PretendSignIn => self.process_pseudo_sign_in(request, result_sender),
             Operation::PretendNotifyId => self.process_pseudo_notify_id(request, result_sender),
@@ -402,9 +399,10 @@ impl<'a> ModuleManager<'a> {
         );
     }
 
-    fn process_get_name(
+    fn process_stream(
         &mut self,
         request: &Request,
+        request_opcode: u8,
         result_sender: Sender<OperationResult>,
     ) -> Result<()> {
         let Value::U8(remote_id) = request.params[0] else {
@@ -447,12 +445,10 @@ impl<'a> ModuleManager<'a> {
             },
         );
 
-        self.request_name(remote_id)?;
-
-        return Ok(());
+        return self.send_op_and_id(request_opcode, remote_id);
     }
 
-    fn process_ack_name(&mut self, request: &Request) -> Result<()> {
+    fn process_ack_stream(&mut self, request: &Request, continue_opcode: u8) -> Result<()> {
         let Value::U8(remote_id) = request.params[0] else {
             return Err(ModuleManagementError {
                 error_type: ErrorType::UserCommandInvalidRequest,
@@ -472,7 +468,7 @@ impl<'a> ModuleManager<'a> {
         if is_done {
             self.streams.remove(&stream_id);
         } else {
-            self.continue_name(remote_id)?;
+            self.send_op_and_id(continue_opcode, remote_id)?;
         }
 
         return Ok(());

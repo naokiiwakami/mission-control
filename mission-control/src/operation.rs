@@ -1,12 +1,14 @@
 use crate::analog3::Value;
 use crate::module_manager::ModuleManagementError;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Operation {
     List,
     Ping,
     GetName,
     AckName,
+    GetConfig,
+    AckConfig,
     RequestUidCancel,
     Cancel,
     // for testing and debugging

@@ -35,10 +35,13 @@ pub const A3_MC_ASSIGN_MODULE_ID: u8 = 0x02;
 pub const A3_MC_PING: u8 = 0x03;
 pub const A3_MC_REQUEST_NAME: u8 = 0x04;
 pub const A3_MC_CONTINUE_NAME: u8 = 0x05;
+pub const A3_MC_REQUEST_CONFIG: u8 = 0x06;
+pub const A3_MC_CONTINUE_CONFIG: u8 = 0x07;
 
 /* Individual module opcodes */
 pub const A3_IM_REPLY_PING: u8 = 0x01;
 pub const A3_IM_REPLY_NAME: u8 = 0x02;
+pub const A3_IM_REPLY_CONFIG: u8 = 0x03;
 
 pub const A3_DATA_LENGTH: u8 = 8;
 
@@ -73,12 +76,20 @@ lazy_static! {
             kind: ValueType::U8,
         });
 
+        l[0] = Attribute {
+            name: String::from("module_uid"),
+            kind: ValueType::Text,
+        };
         l[1] = Attribute {
             name: String::from("name"),
             kind: ValueType::Text,
         };
+        l[2] = Attribute {
+            name: String::from("module_type"),
+            kind: ValueType::Text,
+        };
 
-        l
+        return l;
     };
 }
 
