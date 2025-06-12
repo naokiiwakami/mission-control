@@ -1,65 +1,65 @@
-use crate::operation::{OperationResult, Request};
-use dashmap::DashMap;
-use std::sync::Arc;
+use crate::operation::{Command, OperationResult, Request};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-pub fn start(
-    sessions: Arc<DashMap<u32, Sender<OperationResult>>>,
-) -> (Receiver<Request>, JoinHandle<()>) {
+pub fn start() -> (Receiver<Command>, JoinHandle<()>) {
     let (command_tx, command_rx) = channel(8);
     let handle = tokio::spawn(async move {
         let listener = TcpListener::bind("127.0.0.1:9999").await.unwrap(); // TODO: Handle error more gracefully
         log::info!("Listening on port 9999");
-        let mut next_session_id = 1u32;
         loop {
             // The second item contains the IP and port of the new connection.
             let (stream, _) = listener.accept().await.unwrap();
-            let session_id = next_session_id;
-            next_session_id += 1;
-            start_session(stream, session_id, sessions.clone(), command_tx.clone());
+            start_session(stream, command_tx.clone());
         }
     });
     return (command_rx, handle);
 }
 
-fn start_session(
-    stream: TcpStream,
-    session_id: u32,
-    sessions: Arc<DashMap<u32, Sender<OperationResult>>>,
-    command_tx: Sender<Request>,
-) {
+fn start_session(stream: TcpStream, command_tx: Sender<Command>) {
     tokio::spawn(async move {
-        let (result_tx, result_rx) = channel(8);
-        sessions.insert(session_id, result_tx);
-        let mut session = Session::new(session_id, stream, command_tx, result_rx);
-        session.run().await;
-        sessions.remove(&session_id);
+        let mut session = Session::new(stream, command_tx);
+        session.run().await.unwrap();
     });
 }
 
 struct Session {
-    session_id: u32,
     stream: BufReader<TcpStream>,
-    command_tx: Sender<Request>,
-    result_rx: Receiver<OperationResult>,
+    command_tx: Sender<Command>,
 }
 
 impl Session {
-    pub fn new(
-        session_id: u32,
-        stream: TcpStream,
-        command_tx: Sender<Request>,
-        result_rx: Receiver<OperationResult>,
-    ) -> Self {
+    pub fn new(stream: TcpStream, command_tx: Sender<Command>) -> Self {
         Self {
-            session_id,
             stream: BufReader::new(stream),
             command_tx,
-            result_rx,
         }
+    }
+
+    async fn list(&mut self) -> std::io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        let command = Command::List { resp: tx };
+        self.command_tx.send(command).await.unwrap();
+        match rx.await {
+            Ok(response) => {
+                let reply = response
+                    .iter()
+                    .map(|m| format!("uid {:08x} id {:02x}", m.uid, m.id))
+                    .collect::<Vec<_>>()
+                    .join("\r\n");
+                self.stream
+                    .write_all(format!("{}\r\n", reply).as_bytes())
+                    .await?;
+            }
+            Err(e) => {
+                log::warn!("Operation failed: {:?}", e);
+                self.stream.write_all(b"error\r\n").await?;
+            }
+        }
+        return Ok(());
     }
 
     pub async fn run(&mut self) -> std::io::Result<()> {
@@ -88,8 +88,24 @@ impl Session {
                         "hello" => {
                             self.stream.write_all(b"hi\r\n").await?;
                         }
+                        "hi" => {
+                            let (tx, rx) = oneshot::channel();
+                            let command = Command::Hi { resp: tx };
+                            self.command_tx.send(command).await.unwrap();
+                            match rx.await {
+                                Ok(response) => {
+                                    self.stream.write_all(response.as_bytes()).await?;
+                                }
+                                Err(e) => {
+                                    log::warn!("Operation failed: {:?}", e);
+                                    self.stream.write_all(b"error\r\n").await?;
+                                }
+                            }
+                        }
+                        "list" => {
+                            self.list().await?;
+                        }
                         /*
-                        "list" => self.process(&command, Operation::List, &tokens, &vec![])?,
                         "ping" => self.process(
                             &command,
                             Operation::Ping,

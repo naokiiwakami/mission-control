@@ -1,9 +1,14 @@
+use tokio::sync::oneshot;
+
+use crate::a3_modules::A3Module;
 use crate::analog3::Value;
 use crate::error::ModuleManagementError;
 
-#[derive(Debug, Clone)]
-pub enum Operation {
-    List,
+#[derive(Debug)]
+pub enum Command {
+    List {
+        resp: oneshot::Sender<Vec<A3Module>>,
+    },
     Ping,
     GetName,
     AckName,
@@ -14,12 +19,16 @@ pub enum Operation {
     // for testing and debugging
     PretendSignIn,
     PretendNotifyId,
+    // internal diag
+    Hi {
+        resp: oneshot::Sender<String>,
+    },
 }
 
 #[derive(Debug)]
 pub struct Request {
-    pub client_id: u32,
-    pub operation: Operation,
+    pub session_id: u32,
+    pub operation: Command,
     pub params: Vec<Value>,
 }
 

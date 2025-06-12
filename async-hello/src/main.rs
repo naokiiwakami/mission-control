@@ -1,36 +1,45 @@
+pub mod a3_message;
+pub mod a3_modules;
 pub mod analog3;
 pub mod can_controller;
-pub mod command_processor;
 pub mod error;
+pub mod module_manager;
 pub mod operation;
+pub mod user_session;
 
-use crate::operation::OperationResult;
-use dashmap::DashMap;
 use env_logger::Env;
-use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
+
+use crate::module_manager::ModuleManager;
+use crate::operation::{OperationResult, Response};
 
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
     log::info!("Analog3 mission control started");
 
+    // A3 Modules
+    let (modules_tx, _modules_handle) = a3_modules::start();
+
     // CAN controller
     let (can_tx, mut can_rx, _can_tx_handle) = can_controller::start();
 
-    // Command processor
-    let sessions = Arc::new(DashMap::<u32, Sender<OperationResult>>::new());
-    let (mut command_rx, _command_handle) = command_processor::start(sessions.clone());
+    // Module manager
+    let mut module_manager = ModuleManager::new(can_tx.clone(), modules_tx);
 
-    println!("waiting for a message ...");
+    // User sessions
+    let (mut command_rx, _command_handle) = user_session::start();
 
-    let handle = tokio::spawn(async move {
-        loop {
-            if let Some(message) = can_rx.recv().await {
-                println!(" received! {:08x}", message.id());
-            }
+    a3_message::sign_in(can_tx.clone()).await;
+
+    loop {
+        tokio::select! {
+        Some(can_message) = can_rx.recv() => {
+            module_manager.handle_can_message(can_message);
         }
-    });
-
-    handle.await.unwrap();
+        Some(user_command) = command_rx.recv() => {
+            module_manager.handle_command(user_command);
+        }
+        }
+    }
 }

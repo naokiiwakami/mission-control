@@ -130,7 +130,7 @@ impl<'a> ModuleManager<'a> {
     ) -> Result<Option<Result<Response>>> {
         let remote_uid = in_message.id();
         let remote_id = in_message.get_data(1);
-        log::debug!("Module recognized; id {remote_id:03x} for uid {remote_uid:08x}");
+        log::debug!("Module recognized; id {remote_id:02x} for uid {remote_uid:08x}");
         let module = Module {
             id: remote_id,
             uid: remote_uid,

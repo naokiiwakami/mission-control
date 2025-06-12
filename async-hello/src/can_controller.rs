@@ -139,7 +139,6 @@ fn run_tx(mut tx_receiver: Receiver<CanMessage>) -> JoinHandle<()> {
             if let Some(message) = tx_receiver.recv().await {
                 unsafe {
                     can_send_message(message.message);
-                    can_free_message(message.message);
                 }
             }
         }
