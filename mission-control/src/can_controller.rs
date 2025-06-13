@@ -1,18 +1,30 @@
 #![allow(non_upper_case_globals, non_camel_case_types, non_snake_case)]
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{LazyLock, Mutex};
+use tokio::{
+    sync::mpsc::{Receiver, Sender, channel},
+    task::JoinHandle,
+};
 
-use crate::event_type::EventType;
-
+#[derive(Debug)]
 pub struct CanMessage {
     pub message: *mut can_message_t,
     message_attached: bool,
 }
 
 impl CanMessage {
-    pub fn new(message: *mut can_message_t) -> Self {
+    pub fn new() -> Self {
+        unsafe {
+            let message = can_create_message();
+            return Self {
+                message,
+                message_attached: false,
+            };
+        }
+    }
+
+    pub fn from_raw_message(message: *mut can_message_t) -> Self {
         return Self {
             message: message,
             message_attached: true,
@@ -79,10 +91,16 @@ impl CanMessage {
         }
     }
 
-    /// Detach the inside message after its ownership is moved
-    /// into the C can-controller library.
-    pub fn detach(&mut self) {
-        self.message_attached = false;
+    pub fn data(&self) -> [u8; 8usize] {
+        unsafe {
+            return (*self.message).data;
+        }
+    }
+
+    /// Attach the inside message so that the internal message
+    /// is freed on destruction.
+    pub fn attach(&mut self) {
+        self.message_attached = true;
     }
 }
 
@@ -100,132 +118,52 @@ unsafe impl Sync for CanMessage {}
 unsafe impl Send for CanMessage {}
 
 struct FdHolder {
-    rx_sender: Option<Sender<u64>>,
-    notifier: Option<Sender<EventType>>,
+    rx_sender: Option<Sender<CanMessage>>,
 }
 
-static EVENT_FD_HOLDER: LazyLock<Mutex<FdHolder>> = LazyLock::new(|| {
-    Mutex::new(FdHolder {
-        rx_sender: None,
-        notifier: None,
-    })
-});
+static EVENT_FD_HOLDER: LazyLock<Mutex<FdHolder>> =
+    LazyLock::new(|| Mutex::new(FdHolder { rx_sender: None }));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn notify_message(message: *mut can_message_t) {
     let holder = EVENT_FD_HOLDER.lock().unwrap();
-    if let Some(notifier) = &holder.notifier {
-        if let Some(rx_sender) = &holder.rx_sender {
-            if let Err(e) = rx_sender.send(message as u64) {
-                log::error!("Failed to put a new RX message to channel: {e:?}");
-            } else if let Err(e) = notifier.send(EventType::MessageRx) {
-                log::error!("Failed to notify RX: {e:?}");
-            }
+    if let Some(rx_sender) = &holder.rx_sender {
+        if let Err(e) = rx_sender.try_send(CanMessage::from_raw_message(message)) {
+            log::error!("Failed to put a new RX message to channel: {e:?}");
         }
     }
 }
 
-pub struct CanController {
-    rx_receiver: Receiver<u64>,
-    tx_sender: Sender<CanMessage>,
-    tx_receiver: Receiver<CanMessage>,
-    tx_notif: Sender<EventType>,
-}
-
-impl CanController {
-    pub fn new(notifier: Sender<EventType>) -> Self {
-        unsafe {
-            let (rx_sender, rx_receiver) = std::sync::mpsc::channel();
-
-            let mut holder = EVENT_FD_HOLDER.lock().unwrap();
-            holder.rx_sender = Some(rx_sender);
-            holder.notifier = Some(notifier.clone());
-
-            let (tx_sender, tx_receiver) = std::sync::mpsc::channel();
-
-            // OK the CAN interface is ready to be initialized
-            can_set_rx_message_consumer(Some(notify_message));
-            can_init();
-
-            return Self {
-                rx_receiver: rx_receiver,
-                tx_sender: tx_sender,
-                tx_receiver: tx_receiver,
-                tx_notif: notifier,
-            };
-        }
-    }
-
-    pub fn get_message(&self) -> Option<CanMessage> {
-        match self.rx_receiver.recv() {
-            Ok(data) => unsafe {
-                let message: *mut can_message_t = std::mem::transmute(data);
-                return Some(CanMessage::new(message));
-            },
-            Err(e) => {
-                log::error!("Error in fetching incoming message from channel: {e:?}");
-                return None;
-            }
-        }
-    }
-
-    pub fn create_message(&self) -> CanMessage {
-        unsafe {
-            let api_message = can_create_message();
-            return CanMessage::new(api_message);
-        }
-    }
-
-    /// Put a message to the TX pipe.
-    ///
-    /// The CAN interface is not thread safe. We just put the message
-    /// into the TX pipe and let the main thread pick up and handle it
-    /// in the event loop.
-    ///
-    /// # Arguments
-    ///
-    /// - `&self` (`Boundary`) - Myself.
-    /// - `mut message` (`CanMessage`) - Message to send.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let mut message = boundary.create_message();
-    ///
-    /// // set message contents here
-    ///
-    /// boundary.put_message(message);
-    /// ```
-    pub fn put_message(&self, mut message: CanMessage) {
-        // The CAN interface will take care of releasing the message.
-        // We disconnect the C object from the Rust ecosystem here.
-        message.detach();
-        if let Err(e) = self.tx_sender.send(message) {
-            log::error!("Failed to put a tx message to pipe: {e:?}");
-            return;
-        }
-        if let Err(e) = self.tx_notif.send(EventType::MessageTx) {
-            log::error!("Failed to send MessageTx notif: {e:?}");
-        }
-    }
-
-    /// Send a message in the TX pipe if any.
-    ///
-    /// This method is meant to be called in the main thread in the event loop.
-    ///
-    /// # Arguments
-    ///
-    /// - `&self` (`Boundary`) - Myself.
-    pub fn send_message(&self) {
-        match self.tx_receiver.recv() {
-            Ok(message) => {
-                // if let Some(message) = self.get_message_from_pipe(self.tx_fd) {
+fn run_tx(mut tx_receiver: Receiver<CanMessage>) -> JoinHandle<()> {
+    return tokio::spawn(async move {
+        loop {
+            if let Some(message) = tx_receiver.recv().await {
                 unsafe {
                     can_send_message(message.message);
                 }
-                // }
             }
-            Err(e) => log::error!("tx message error: {e:?}"),
+        }
+    });
+}
+
+pub fn start() -> (Sender<CanMessage>, Receiver<CanMessage>, JoinHandle<()>) {
+    // Set up message rx
+    let (rx_sender, rx_receiver) = channel(16);
+    let mut holder = EVENT_FD_HOLDER.lock().unwrap();
+    holder.rx_sender = Some(rx_sender);
+
+    unsafe {
+        can_set_rx_message_consumer(Some(notify_message));
+        if can_init() != 0 {
+            log::error!("Error encountered while initializing CAN controller");
+            std::process::exit(1);
         }
     }
+
+    // set up message tx
+    let (tx_sender, tx_receiver) = channel(16);
+
+    let handle = run_tx(tx_receiver);
+
+    (tx_sender, rx_receiver, handle)
 }
