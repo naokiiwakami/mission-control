@@ -7,6 +7,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::analog3::Value;
+use crate::error::ErrorType;
 use crate::operation::{Command, OperationResult, Request};
 use crate::user_session::spec::Spec;
 
@@ -95,7 +96,11 @@ impl Session {
             }
             Err(e) => {
                 log::warn!("Operation failed: {:?}", e);
-                self.stream.write_all(b"error\r\n").await?;
+                let error_message = match e.error_type {
+                    ErrorType::Timeout => " timeout\r\n",
+                    _ => " error\r\n",
+                };
+                self.stream.write_all(error_message.as_bytes()).await?;
             }
         }
         return Ok(());
