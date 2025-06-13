@@ -36,12 +36,20 @@ pub async fn ping(can_tx: Sender<CanMessage>, remote_id: u8, enable_visual: bool
     can_tx.send(out_message).await.unwrap();
 }
 
-pub async fn get_name(can_tx: Sender<CanMessage>, remote_id: u8) {
+pub async fn request_name(can_tx: Sender<CanMessage>, remote_id: u8) {
     send_op_and_id(can_tx, a3::A3_MC_REQUEST_NAME, remote_id).await;
 }
 
 pub async fn continue_name(can_tx: Sender<CanMessage>, remote_id: u8) {
     send_op_and_id(can_tx, a3::A3_MC_CONTINUE_NAME, remote_id).await;
+}
+
+pub async fn request_config(can_tx: Sender<CanMessage>, remote_id: u8) {
+    send_op_and_id(can_tx, a3::A3_MC_REQUEST_CONFIG, remote_id).await;
+}
+
+pub async fn continue_config(can_tx: Sender<CanMessage>, remote_id: u8) {
+    send_op_and_id(can_tx, a3::A3_MC_CONTINUE_CONFIG, remote_id).await;
 }
 
 async fn send_op_and_id(can_tx: Sender<CanMessage>, opcode: u8, remote_id: u8) {

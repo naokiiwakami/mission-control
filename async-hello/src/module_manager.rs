@@ -59,7 +59,7 @@ impl ModuleManager {
         return match opcode {
             a3::A3_IM_REPLY_PING => self.handle_stream_reply("ping", message).unwrap(),
             a3::A3_IM_REPLY_NAME => self.handle_stream_reply("get-name", message).unwrap(),
-            // a3::A3_IM_REPLY_CONFIG => self.handle_name_reply(message),
+            a3::A3_IM_REPLY_CONFIG => self.handle_stream_reply("get-config", message).unwrap(),
             _ => {
                 log::warn!(
                     "Unknown opcode; id={:08x}, opcode={:02x}",
@@ -160,7 +160,7 @@ impl ModuleManager {
         });
     }
 
-    fn list(&mut self, resp: oneshot::Sender<std::result::Result<Vec<A3Module>, AppError>>) {
+    fn list(&mut self, resp: oneshot::Sender<Result<Vec<A3Module>>>) {
         let modules_tx = self.modules_tx.clone();
         tokio::spawn(async move {
             let (tx, rx) = oneshot::channel();
@@ -179,81 +179,50 @@ impl ModuleManager {
         });
     }
 
-    fn ping(
-        &mut self,
-        id: u8,
-        enable_visual: bool,
-        resp: oneshot::Sender<std::result::Result<(), AppError>>,
-    ) {
+    fn ping(&mut self, id: u8, enable_visual: bool, resp: oneshot::Sender<Result<()>>) {
         let streams_tx = self.streams_tx.clone();
         let can_tx = self.can_tx.clone();
         tokio::spawn(async move {
-            // start a stream
-            let (start_resp_tx, start_resp_rx) = oneshot::channel();
-            let (stream_resp_tx, stream_resp_rx) = oneshot::channel();
-            let operation = streams::Operation::Start {
-                remote_id: id,
-                op_resp: start_resp_tx,
-                stream_resp: stream_resp_tx,
-            };
-            streams_tx.send(operation).await.unwrap();
-            if let Err(e) = start_resp_rx.await.unwrap() {
-                let error = match e.error_type {
-                    streams::ErrorType::Busy => AppError {
-                        error_type: crate::error::ErrorType::A3StreamConflict,
-                        message: "busy".to_string(),
-                    },
-                    _ => AppError {
-                        error_type: crate::error::ErrorType::RuntimeError,
-                        message: format!("{:?}", e),
-                    },
-                };
-                resp.send(Err(error)).unwrap();
-                return;
-            }
-            // ping
-            a3_message::ping(can_tx, id, enable_visual).await;
-
-            // wait for the response and
-            if let Err(_) = timeout(Duration::from_secs(10), stream_resp_rx).await {
-                resp.send(Err(AppError::timeout())).unwrap();
-            } else {
-                resp.send(Ok(())).unwrap();
+            let result = ping_core(streams_tx.clone(), can_tx, id, enable_visual).await;
+            if let Err(e) = resp.send(result) {
+                log::error!("Error in sending back the ping result: {:?}", e);
             }
 
-            // terminate the stream
-            let (term_resp_tx, term_resp_rx) = oneshot::channel();
-            streams_tx
-                .send(streams::Operation::Terminate {
-                    remote_id: id,
-                    op_resp: term_resp_tx,
-                })
-                .await
-                .unwrap();
-            term_resp_rx.await.unwrap().unwrap();
+            terminate_stream(streams_tx, id).await;
         });
     }
 
-    fn get_name(&mut self, id: u8, resp: oneshot::Sender<std::result::Result<String, AppError>>) {
+    fn get_name(&mut self, id: u8, resp: oneshot::Sender<Result<String>>) {
         let streams_tx = self.streams_tx.clone();
         let can_tx = self.can_tx.clone();
         tokio::spawn(async move {
             let result = get_name_core(streams_tx.clone(), can_tx, id).await;
-            resp.send(result).unwrap();
+            if let Err(e) = resp.send(result) {
+                log::error!("Error in sending back the get-name result: {:?}", e);
+            }
 
-            // terminate the stream
-            let (term_resp_tx, term_resp_rx) = oneshot::channel();
-            streams_tx
-                .clone()
-                .send(streams::Operation::Terminate {
-                    remote_id: id,
-                    op_resp: term_resp_tx,
-                })
-                .await
-                .unwrap();
-            term_resp_rx.await.unwrap().unwrap();
+            terminate_stream(streams_tx, id).await;
         });
     }
+}
+
+async fn ping_core(
+    streams_tx: Sender<streams::Operation>,
+    can_tx: Sender<CanMessage>,
+    id: u8,
+    enable_visual: bool,
+) -> Result<()> {
+    // start a stream
+    let stream_resp_rx = start_stream(streams_tx.clone(), id).await?;
+
+    // ping
+    a3_message::ping(can_tx, id, enable_visual).await;
+
+    // wait for the response and
+    return match timeout(Duration::from_secs(10), stream_resp_rx).await {
+        Ok(_) => Ok(()),
+        Err(_) => Err(AppError::timeout()),
+    };
 }
 
 async fn get_name_core(
@@ -265,7 +234,7 @@ async fn get_name_core(
     let mut stream_resp_rx = Some(start_stream(streams_tx.clone(), id).await?);
 
     // send request message
-    a3_message::get_name(can_tx.clone(), id).await;
+    a3_message::request_name(can_tx.clone(), id).await;
 
     // control the stream
     let mut chunk_builder = ChunkBuilder::for_single_field();
@@ -347,4 +316,16 @@ async fn start_or_continue_stream(
         return Err(error);
     }
     return Ok(stream_resp_rx);
+}
+
+async fn terminate_stream(streams_tx: Sender<streams::Operation>, id: u8) {
+    let (term_resp_tx, term_resp_rx) = oneshot::channel();
+    streams_tx
+        .send(streams::Operation::Terminate {
+            remote_id: id,
+            op_resp: term_resp_tx,
+        })
+        .await
+        .unwrap();
+    term_resp_rx.await.unwrap().unwrap();
 }
