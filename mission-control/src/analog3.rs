@@ -45,6 +45,17 @@ pub const A3_IM_REPLY_CONFIG: u8 = 0x03;
 
 pub const A3_DATA_LENGTH: u8 = 8;
 
+#[derive(Debug, Clone)]
+pub struct TypeError {}
+
+impl fmt::Display for TypeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "invalid value type")
+    }
+}
+
+impl std::error::Error for TypeError {}
+
 #[derive(Debug)]
 pub enum Value {
     U8(u8),
@@ -52,6 +63,43 @@ pub enum Value {
     U32(u32),
     Text(String),
     Bool(bool),
+}
+
+impl Value {
+    pub fn as_u8(&self) -> std::result::Result<u8, TypeError> {
+        let Value::U8(value) = self else {
+            return Err(TypeError {});
+        };
+        return Ok(*value);
+    }
+
+    pub fn as_u16(&self) -> std::result::Result<u16, TypeError> {
+        let Value::U16(value) = self else {
+            return Err(TypeError {});
+        };
+        return Ok(*value);
+    }
+
+    pub fn as_u32(&self) -> std::result::Result<u32, TypeError> {
+        let Value::U32(value) = self else {
+            return Err(TypeError {});
+        };
+        return Ok(*value);
+    }
+
+    pub fn as_bool(&self) -> std::result::Result<bool, TypeError> {
+        let Value::Bool(value) = self else {
+            return Err(TypeError {});
+        };
+        return Ok(*value);
+    }
+
+    pub fn as_text(&self) -> std::result::Result<String, TypeError> {
+        let Value::Text(value) = self else {
+            return Err(TypeError {});
+        };
+        return Ok(value.clone());
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +111,28 @@ pub enum ValueType {
     Bool,
 }
 
+impl ValueType {
+    pub fn to_string(&self, value: &Value) -> String {
+        return match self {
+            ValueType::U8 => value.as_u8().unwrap().to_string(),
+            ValueType::U16 => value.as_u16().unwrap().to_string(),
+            ValueType::U32 => value.as_u32().unwrap().to_string(),
+            ValueType::Text => value.as_text().unwrap(),
+            ValueType::Bool => value.as_bool().unwrap().to_string(),
+        };
+    }
+
+    pub fn to_hex(&self, value: &Value) -> String {
+        return match self {
+            ValueType::U8 => format!("{:02x}", value.as_u8().unwrap()),
+            ValueType::U16 => format!("{:04x}", value.as_u16().unwrap()),
+            ValueType::U32 => format!("{:08x}", value.as_u32().unwrap()),
+            ValueType::Text => value.as_text().unwrap(),
+            ValueType::Bool => value.as_bool().unwrap().to_string(),
+        };
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Attribute {
     pub name: String,
@@ -70,7 +140,7 @@ pub struct Attribute {
 }
 
 lazy_static! {
-    static ref ATTRIBUTES: [Attribute; 256] = {
+    pub static ref ATTRIBUTES: [Attribute; 256] = {
         let mut l = core::array::from_fn(|_| Attribute {
             name: String::from(""),
             kind: ValueType::U8,
@@ -78,14 +148,14 @@ lazy_static! {
 
         l[0] = Attribute {
             name: String::from("module_uid"),
-            kind: ValueType::Text,
+            kind: ValueType::U32,
         };
         l[1] = Attribute {
-            name: String::from("name"),
-            kind: ValueType::Text,
+            name: String::from("module_type"),
+            kind: ValueType::U8,
         };
         l[2] = Attribute {
-            name: String::from("module_type"),
+            name: String::from("name"),
             kind: ValueType::Text,
         };
 
@@ -94,13 +164,13 @@ lazy_static! {
 }
 
 #[derive(Debug, Clone)]
-pub struct DataField {
+pub struct Property {
     pub id: u8,
     pub length: u8,
     pub data: Vec<u8>,
 }
 
-impl DataField {
+impl Property {
     pub fn get_attribute(&self) -> Option<&Attribute> {
         let attr = &ATTRIBUTES[self.id as usize];
         if !attr.name.is_empty() {
@@ -217,12 +287,12 @@ impl DataFieldBuilder {
         return Ok((is_ready, index + to_read));
     }
 
-    pub fn build(&mut self) -> Result<DataField> {
+    pub fn build(&mut self) -> Result<Property> {
         if self.data_pos < self.length as usize {
             return error("DataFieldBuilder: The builder is not ready to build yet");
         }
         if let Some(data) = self.data.take() {
-            return Ok(DataField {
+            return Ok(Property {
                 id: self.id,
                 length: self.length,
                 data,
@@ -234,7 +304,7 @@ impl DataFieldBuilder {
 
 #[derive(Debug, Clone)]
 pub struct ChunkBuilder {
-    chunk: Option<Vec<DataField>>,
+    chunk: Option<Vec<Property>>,
     target_num_fields: usize,
     num_fields_read: bool,
     field_builder: DataFieldBuilder,
@@ -282,7 +352,7 @@ impl ChunkBuilder {
         return Ok(chunk.len() == self.target_num_fields);
     }
 
-    pub fn build(&mut self) -> Result<Vec<DataField>> {
+    pub fn build(&mut self) -> Result<Vec<Property>> {
         let Some(chunk) = self.chunk.as_ref() else {
             return error("ChunkBuilder: build() method cannot be called twice.");
         };

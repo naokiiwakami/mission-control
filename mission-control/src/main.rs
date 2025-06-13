@@ -1,70 +1,43 @@
+pub mod a3_message;
+pub mod a3_modules;
 pub mod analog3;
 pub mod can_controller;
-pub mod command_processor;
-pub mod event_type;
+pub mod error;
 pub mod module_manager;
 pub mod operation;
+pub mod user_session;
 
-use crate::can_controller::CanController;
-use crate::command_processor::start_command_processor;
-use crate::event_type::EventType;
-use crate::module_manager::{ErrorType, ModuleManager};
-use crate::operation::{OperationResult, Request};
-use dashmap::DashMap;
 use env_logger::Env;
-use std::sync::Arc;
-use std::sync::mpsc::{Sender, channel};
 
-fn main() {
+use crate::module_manager::ModuleManager;
+
+#[tokio::main]
+async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
     log::info!("Analog3 mission control started");
-    let (event_notifier, event_notif_receiver) = std::sync::mpsc::channel();
-    let can_controller = CanController::new(event_notifier.clone());
-    let mut module_manager = ModuleManager::new(&can_controller).unwrap();
 
-    let (request_sender, request_receiver) = channel::<Request>();
-    let result_senders: Arc<DashMap<u32, Sender<OperationResult>>> = Arc::new(DashMap::new());
+    // A3 Modules
+    let (modules_tx, _modules_handle) = a3_modules::start();
 
-    start_command_processor(
-        request_sender.clone(),
-        &result_senders,
-        event_notifier.clone(),
-    );
+    // CAN controller
+    let (can_tx, mut can_rx, _can_tx_handle) = can_controller::start();
 
-    // The event loop
+    // Module manager
+    let mut module_manager = ModuleManager::new(can_tx.clone(), modules_tx);
+
+    // User sessions
+    let (mut command_rx, _command_handle) = user_session::start();
+
+    a3_message::sign_in(can_tx.clone()).await;
+
     loop {
-        let event_type = event_notif_receiver.recv().unwrap();
-        match event_type {
-            EventType::MessageRx => {
-                if let Some(message) = can_controller.get_message() {
-                    if let Err(e) = module_manager.handle_message(message) {
-                        match e.error_type {
-                            ErrorType::A3OpCodeUnknown => {
-                                log::warn!("Can message handling failed; {e}");
-                            }
-                            _ => {
-                                log::error!("Can message handling error; {e}");
-                            }
-                        }
-                    }
-                }
-            }
-            EventType::MessageTx => can_controller.send_message(),
-            EventType::RequestSent => {
-                let request: Request = request_receiver.recv().unwrap();
-                match result_senders.get(&request.client_id) {
-                    Some(result_sender) => {
-                        if let Err(e) = module_manager.user_request(&request, result_sender.clone())
-                        {
-                            result_sender.send(Err(e)).unwrap();
-                        }
-                    }
-                    None => {
-                        log::error!("RequestSent: unknown client_id: {}", request.client_id);
-                    }
-                }
-            }
-            _ => log::warn!("Unknown event: {:?}", event_type),
+        tokio::select! {
+        Some(can_message) = can_rx.recv() => {
+            module_manager.handle_can_message(can_message);
+        }
+        Some(user_command) = command_rx.recv() => {
+            module_manager.handle_command(user_command);
+        }
         }
     }
 }

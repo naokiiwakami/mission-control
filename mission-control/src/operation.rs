@@ -1,25 +1,50 @@
-use crate::analog3::Value;
-use crate::module_manager::ModuleManagementError;
+use tokio::sync::oneshot;
 
-#[derive(Debug, Clone)]
-pub enum Operation {
-    List,
-    Ping,
-    GetName,
-    AckName,
-    GetConfig,
-    AckConfig,
-    RequestUidCancel,
-    Cancel,
+use crate::a3_modules::A3Module;
+use crate::analog3::{Property, Value};
+use crate::error::AppError;
+
+#[derive(Debug)]
+pub enum Command {
+    List {
+        resp: oneshot::Sender<Result<Vec<A3Module>, AppError>>,
+    },
+    Ping {
+        id: u8,
+        enable_visual: bool,
+        resp: oneshot::Sender<Result<(), AppError>>,
+    },
+    GetName {
+        id: u8,
+        resp: oneshot::Sender<Result<String, AppError>>,
+    },
+    GetConfig {
+        id: u8,
+        resp: oneshot::Sender<Result<Vec<Property>, AppError>>,
+    },
+    RequestUidCancel {
+        uid: u32,
+        resp: oneshot::Sender<Result<(), AppError>>,
+    },
     // for testing and debugging
-    PretendSignIn,
-    PretendNotifyId,
+    Hi {
+        resp: oneshot::Sender<Result<String, AppError>>,
+    },
+    PretendSignIn {
+        uid: u32,
+        resp: oneshot::Sender<Result<(), AppError>>,
+    },
+    PretendNotifyId {
+        uid: u32,
+        id: u8,
+        resp: oneshot::Sender<Result<(), AppError>>,
+    },
 }
 
 #[derive(Debug)]
 pub struct Request {
-    pub client_id: u32,
-    pub operation: Operation,
+    pub session_id: u32,
+    pub operation: Command,
     pub params: Vec<Value>,
 }
 
@@ -31,4 +56,4 @@ pub struct Response {
     pub stream_id: u8,
 }
 
-pub type OperationResult = Result<Response, ModuleManagementError>;
+pub type OperationResult = Result<Response, AppError>;
