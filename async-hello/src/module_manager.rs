@@ -44,7 +44,7 @@ impl ModuleManager {
             return match opcode {
                 a3::A3_ADMIN_SIGN_IN => self.handle_remote_sign_in(message).unwrap(),
                 a3::A3_ADMIN_NOTIFY_ID => self.handle_remote_id_notification(message).unwrap(),
-                // a3::A3_ADMIN_REQ_UID_CANCEL => self.handle_uid_cancel_req(message),
+                a3::A3_ADMIN_REQ_UID_CANCEL => self.handle_uid_cancel_req(message).unwrap(),
                 _ => {
                     log::warn!(
                         "Unknown opcode; id={:08x}, opcode={:02x}",
@@ -88,6 +88,20 @@ impl ModuleManager {
                 remote_id,
                 remote_uid
             );
+        });
+        return Ok(());
+    }
+
+    fn handle_uid_cancel_req(&mut self, in_message: CanMessage) -> Result<()> {
+        let modules_tx = self.modules_tx.clone();
+        tokio::spawn(async move {
+            let uid = in_message.id();
+            let id = in_message.get_data(1);
+            log::debug!("Module recognized; id {id:02x} for uid {uid:08x}");
+            modules_tx
+                .send(a3_modules::Operation::Deregister { uid })
+                .await
+                .unwrap();
         });
         return Ok(());
     }

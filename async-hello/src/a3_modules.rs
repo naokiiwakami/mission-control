@@ -27,6 +27,9 @@ pub enum Operation {
         uid: u32,
         id: u8,
     },
+    Deregister {
+        uid: u32,
+    },
     List {
         resp: oneshot::Sender<Result<Vec<A3Module>, AppError>>,
     },
@@ -64,6 +67,12 @@ impl A3Modules {
         let module = A3Module { id, uid };
         self.modules_by_id.insert(module.id, module.clone());
         self.modules_by_uid.insert(module.uid, module);
+    }
+
+    pub fn deregister(&mut self, uid: u32) {
+        if let Some(module) = self.modules_by_uid.remove(&uid) {
+            self.modules_by_id.remove(&module.id);
+        }
     }
 
     pub fn list(&self) -> Vec<A3Module> {
@@ -105,6 +114,9 @@ async fn handle_requests(mut operation_rx: Receiver<Operation>) {
                 }
                 Operation::Register { uid, id } => {
                     modules.register(uid, id);
+                }
+                Operation::Deregister { uid } => {
+                    modules.deregister(uid);
                 }
                 Operation::List { resp } => {
                     let modules_list = modules.list();
