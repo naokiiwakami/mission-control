@@ -2,26 +2,29 @@ mod streams;
 
 use std::time::Duration;
 
-use tokio::sync::{mpsc::Sender, oneshot};
-use tokio::time::timeout;
+use tokio::{
+    sync::{mpsc::Sender, oneshot},
+    time::timeout,
+};
 
-use crate::a3_message;
-use crate::a3_modules;
-use crate::a3_modules::A3Module;
-use crate::analog3::{self as a3, ChunkBuilder, Property};
-use crate::can_controller::CanMessage;
-use crate::error::AppError;
-use crate::operation::Command;
+use crate::{
+    a3_message,
+    a3_modules::{self, A3Module},
+    analog3::{self as a3, ChunkBuilder, Property},
+    can_controller::CanMessage,
+    command::Command,
+    error::AppError,
+};
 
 type Result<T> = std::result::Result<T, AppError>;
 
-pub struct ModuleManager {
+pub struct MissionControl {
     can_tx: Sender<CanMessage>,
     modules_tx: Sender<a3_modules::Operation>,
     streams_tx: Sender<streams::Operation>,
 }
 
-impl ModuleManager {
+impl MissionControl {
     pub fn new(can_tx: Sender<CanMessage>, modules_tx: Sender<a3_modules::Operation>) -> Self {
         let (streams_tx, _) = streams::start();
         Self {

@@ -2,14 +2,14 @@ pub mod a3_message;
 pub mod a3_modules;
 pub mod analog3;
 pub mod can_controller;
+pub mod command;
 pub mod error;
-pub mod module_manager;
-pub mod operation;
+pub mod mission_control;
 pub mod user_session;
 
 use env_logger::Env;
 
-use crate::module_manager::ModuleManager;
+use crate::mission_control::MissionControl;
 
 #[tokio::main]
 async fn main() {
@@ -22,8 +22,8 @@ async fn main() {
     // CAN controller
     let (can_tx, mut can_rx, _can_tx_handle) = can_controller::start();
 
-    // Module manager
-    let mut module_manager = ModuleManager::new(can_tx.clone(), modules_tx);
+    // Mission control
+    let mut mission_control = MissionControl::new(can_tx.clone(), modules_tx);
 
     // User sessions
     let (mut command_rx, _command_handle) = user_session::start();
@@ -33,10 +33,10 @@ async fn main() {
     loop {
         tokio::select! {
         Some(can_message) = can_rx.recv() => {
-            module_manager.handle_can_message(can_message);
+            mission_control.handle_can_message(can_message);
         }
         Some(user_command) = command_rx.recv() => {
-            module_manager.handle_command(user_command);
+            mission_control.handle_command(user_command);
         }
         }
     }

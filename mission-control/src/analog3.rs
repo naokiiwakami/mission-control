@@ -1,6 +1,7 @@
-use lazy_static::lazy_static;
 use std::cmp::min;
 use std::fmt;
+
+use lazy_static::lazy_static;
 
 // ID assignments /////////////////////////////////
 pub const A3_ID_MIDI_TIMING_CLOCK: u32 = 0x100;

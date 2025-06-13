@@ -1,8 +1,10 @@
 use tokio::sync::oneshot;
 
-use crate::a3_modules::A3Module;
-use crate::analog3::{Property, Value};
-use crate::error::AppError;
+use crate::{
+    a3_modules::A3Module,
+    analog3::{Property, Value},
+    error::AppError,
+};
 
 #[derive(Debug)]
 pub enum Command {

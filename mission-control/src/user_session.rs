@@ -2,16 +2,20 @@ mod spec;
 
 use std::cmp::max;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::{Receiver, Sender, channel};
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+    sync::mpsc::{Receiver, Sender, channel},
+    sync::oneshot,
+    task::JoinHandle,
+};
 
-use crate::analog3::{ATTRIBUTES, Value};
-use crate::error::{AppError, ErrorType};
-use crate::operation::Command;
-use crate::user_session::spec::Spec;
+use crate::{
+    analog3::{ATTRIBUTES, Value},
+    command::Command,
+    error::{AppError, ErrorType},
+    user_session::spec::Spec,
+};
 
 pub fn start() -> (Receiver<Command>, JoinHandle<()>) {
     let (command_tx, command_rx) = channel(8);
