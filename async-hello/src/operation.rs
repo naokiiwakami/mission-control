@@ -1,7 +1,7 @@
 use tokio::sync::oneshot;
 
 use crate::a3_modules::A3Module;
-use crate::analog3::Value;
+use crate::analog3::{Property, Value};
 use crate::error::AppError;
 
 #[derive(Debug)]
@@ -18,11 +18,11 @@ pub enum Command {
         id: u8,
         resp: oneshot::Sender<Result<String, AppError>>,
     },
-    AckName,
-    GetConfig,
-    AckConfig,
+    GetConfig {
+        id: u8,
+        resp: oneshot::Sender<Result<Vec<Property>, AppError>>,
+    },
     RequestUidCancel,
-    Cancel,
     // for testing and debugging
     PretendSignIn,
     PretendNotifyId,

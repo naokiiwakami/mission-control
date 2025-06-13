@@ -8,8 +8,7 @@ use tokio::time::timeout;
 use crate::a3_message;
 use crate::a3_modules;
 use crate::a3_modules::A3Module;
-use crate::analog3 as a3;
-use crate::analog3::ChunkBuilder;
+use crate::analog3::{self as a3, ChunkBuilder, Property};
 use crate::can_controller::CanMessage;
 use crate::error::AppError;
 use crate::operation::Command;
@@ -148,6 +147,7 @@ impl ModuleManager {
                 resp,
             } => self.ping(id, enable_visual, resp),
             Command::GetName { id, resp } => self.get_name(id, resp),
+            Command::GetConfig { id, resp } => self.get_config(id, resp),
             _ => {
                 log::error!("Operation not implemented: {:?}", command);
             }
@@ -204,6 +204,19 @@ impl ModuleManager {
             terminate_stream(streams_tx, id).await;
         });
     }
+
+    fn get_config(&mut self, id: u8, resp: oneshot::Sender<Result<Vec<Property>>>) {
+        let streams_tx = self.streams_tx.clone();
+        let can_tx = self.can_tx.clone();
+        tokio::spawn(async move {
+            let result = get_config_core(streams_tx.clone(), can_tx, id).await;
+            if let Err(e) = resp.send(result) {
+                log::error!("Error in sending back the get-name result: {:?}", e);
+            }
+
+            terminate_stream(streams_tx, id).await;
+        });
+    }
 }
 
 async fn ping_core(
@@ -252,12 +265,53 @@ async fn get_name_core(
         match chunk_builder.data(&data.as_slice()[1..size], size - 1) {
             Ok(is_done) => {
                 if is_done {
-                    let chunk = chunk_builder.build().unwrap();
-                    let name = chunk[0].get_value_as_string().unwrap();
+                    let properties = chunk_builder.build().unwrap();
+                    let name = properties[0].get_value_as_string().unwrap();
                     return Ok(name);
                 }
                 stream_resp_rx.replace(continue_stream(streams_tx.clone(), id).await?);
                 a3_message::continue_name(can_tx.clone(), id).await;
+            }
+            Err(e) => {
+                let message = format!("GetName: Data parsing failed: {:?}", e);
+                return Err(AppError::runtime(message.as_str()));
+            }
+        }
+    }
+}
+
+async fn get_config_core(
+    streams_tx: Sender<streams::Operation>,
+    can_tx: Sender<CanMessage>,
+    id: u8,
+) -> Result<Vec<Property>> {
+    // start a stream
+    let mut stream_resp_rx = Some(start_stream(streams_tx.clone(), id).await?);
+
+    // send request message
+    a3_message::request_config(can_tx.clone(), id).await;
+
+    // control the stream
+    let mut chunk_builder = ChunkBuilder::new();
+    loop {
+        let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
+        else {
+            return Err(AppError::timeout());
+        };
+        let message = result.unwrap();
+        let data = &message.data();
+        let size = message.data_length() as usize;
+        if size < 2 {
+            return Err(AppError::runtime("zero-length data received"));
+        }
+        match chunk_builder.data(&data.as_slice()[1..size], size - 1) {
+            Ok(is_done) => {
+                if is_done {
+                    let properties = chunk_builder.build().unwrap();
+                    return Ok(properties);
+                }
+                stream_resp_rx.replace(continue_stream(streams_tx.clone(), id).await?);
+                a3_message::continue_config(can_tx.clone(), id).await;
             }
             Err(e) => {
                 let message = format!("GetName: Data parsing failed: {:?}", e);

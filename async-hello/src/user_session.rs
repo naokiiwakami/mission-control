@@ -1,12 +1,14 @@
 mod spec;
 
+use std::cmp::max;
+
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use crate::analog3::Value;
+use crate::analog3::{ATTRIBUTES, Value};
 use crate::error::{AppError, ErrorType};
 use crate::operation::Command;
 use crate::user_session::spec::Spec;
@@ -75,8 +77,8 @@ impl Session {
                         "list" => self.list().await?,
                         "ping" => self.ping(command, &tokens).await?,
                         "get-name" => self.get_name(&command, &tokens).await?,
+                        "get-config" => self.get_config(&command, &tokens).await?,
                         /*
-                        "get-config" => self.get_config(&command, &tokens)?,
                         "cancel-uid" => self.process(
                             &command,
                             Operation::RequestUidCancel,
@@ -126,8 +128,8 @@ impl Session {
         let command = Command::List { resp: resp_tx };
         self.command_tx.send(command).await.unwrap();
         return self
-            .wait_and_handle_response(resp_rx, |response| {
-                let reply = response
+            .wait_and_handle_response(resp_rx, |modules| {
+                let reply = modules
                     .iter()
                     .map(|m| format!("uid {:08x} id {:02x}", m.uid, m.id))
                     .collect::<Vec<_>>()
@@ -175,7 +177,51 @@ impl Session {
         let command = Command::GetName { id, resp: resp_tx };
         self.command_tx.send(command).await.unwrap();
 
-        return self.wait_and_handle_response(resp_rx, |r| r).await;
+        return self.wait_and_handle_response(resp_rx, |name| name).await;
+    }
+
+    async fn get_config(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        let specs = vec![Spec::u8("id", true)];
+        let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
+            return Ok(());
+        };
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let id = params[0].as_u8().unwrap();
+        let command = Command::GetConfig { id, resp: resp_tx };
+        self.command_tx.send(command).await.unwrap();
+
+        return self
+            .wait_and_handle_response(resp_rx, |properties| {
+                // show only the common fields for now
+                let mut key_values = Vec::<(String, String)>::new();
+                let mut longest = 0;
+                for property in properties {
+                    let prop_id = property.id as usize;
+                    if prop_id <= 2 {
+                        let name = &ATTRIBUTES[prop_id].name;
+                        let value = ATTRIBUTES[prop_id]
+                            .kind
+                            .to_hex(&property.get_value().unwrap());
+                        longest = max(name.len(), longest);
+                        key_values.push((name.clone(), value));
+                    }
+                }
+                let mut lines = Vec::<String>::new();
+                lines.push("".to_string());
+                for (name, value) in key_values {
+                    let mut line: String = format!("  {}", name);
+                    for _ in name.len()..longest {
+                        line.push(' ');
+                    }
+                    line.push_str(" : ");
+                    line.push_str(value.as_str());
+                    lines.push(line);
+                }
+                lines.push("".to_string());
+                return lines.join("\r\n");
+            })
+            .await;
     }
 
     async fn parse_params(
