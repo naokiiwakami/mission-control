@@ -8,7 +8,7 @@ use tokio::task::JoinHandle;
 
 use crate::analog3::Value;
 use crate::error::ErrorType;
-use crate::operation::{Command, OperationResult, Request};
+use crate::operation::Command;
 use crate::user_session::spec::Spec;
 
 pub fn start() -> (Receiver<Command>, JoinHandle<()>) {
@@ -42,6 +42,88 @@ impl Session {
         Self {
             stream: BufReader::new(stream),
             command_tx,
+        }
+    }
+
+    pub async fn run(&mut self) -> std::io::Result<()> {
+        self.stream
+            .write_all(b"welcome to analog3 mission control\r\n")
+            .await?;
+
+        loop {
+            self.stream.write_all(b"analog3> ").await?;
+            let mut line = String::new();
+            match self.stream.read_line(&mut line).await? {
+                0 => {
+                    log::debug!("Connection closed");
+                    return Ok(());
+                }
+                _ => {
+                    let trimmed = line.trim().to_string();
+                    log::debug!("Received: {}", trimmed);
+                    let tokens: Vec<String> = trimmed.split(" ").map(str::to_string).collect();
+                    if tokens.is_empty() {
+                        // do nothing
+                        continue;
+                    }
+                    let command = tokens[0].trim();
+                    match command {
+                        "hello" => {
+                            self.stream.write_all(b"hi\r\n").await?;
+                        }
+                        "hi" => {
+                            let (tx, rx) = oneshot::channel();
+                            let command = Command::Hi { resp: tx };
+                            self.command_tx.send(command).await.unwrap();
+                            match rx.await {
+                                Ok(response) => {
+                                    self.stream.write_all(response.as_bytes()).await?;
+                                }
+                                Err(e) => {
+                                    log::warn!("Operation failed: {:?}", e);
+                                    self.stream.write_all(b"error\r\n").await?;
+                                }
+                            }
+                        }
+                        "list" => self.list().await?,
+                        "ping" => self.ping(command, &tokens).await?,
+                        "get-name" => self.get_name(&command, &tokens).await?,
+                        /*
+                        "get-config" => self.get_config(&command, &tokens)?,
+                        "cancel-uid" => self.process(
+                            &command,
+                            Operation::RequestUidCancel,
+                            &tokens,
+                            &vec![Spec::u32("uid", true)],
+                        )?,
+                        "pretend-sign-in" => self.process(
+                            &command,
+                            Operation::PretendSignIn,
+                            &tokens,
+                            &vec![Spec::u32("uid", true)],
+                        )?,
+                        "pretend-notify-id" => self.process(
+                            &command,
+                            Operation::PretendNotifyId,
+                            &tokens,
+                            &vec![Spec::u32("uid", true), Spec::u8("id", true)],
+                        )?,
+                        */
+                        "quit" => {
+                            self.stream.write_all(b"bye!\r\n").await?;
+                            return Ok(());
+                        }
+                        "" => {
+                            // do nothing
+                        }
+                        _ => {
+                            self.stream
+                                .write_all(format!("{}: Unknown command\r\n", command).as_bytes())
+                                .await?;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -106,6 +188,34 @@ impl Session {
         return Ok(());
     }
 
+    async fn get_name(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        let specs = vec![Spec::u8("id", true)];
+        let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
+            return Ok(());
+        };
+
+        let (tx, rx) = oneshot::channel();
+        let id = params[0].as_u8().unwrap();
+        let command = Command::GetName { id, resp: tx };
+        self.command_tx.send(command).await.unwrap();
+        match rx.await.unwrap() {
+            Ok(name) => {
+                self.stream
+                    .write_all(format!("{}\r\n", name).as_bytes())
+                    .await?;
+            }
+            Err(e) => {
+                log::warn!("Operation failed: {:?}", e);
+                let error_message = match e.error_type {
+                    ErrorType::Timeout => " timeout\r\n",
+                    _ => " error\r\n",
+                };
+                self.stream.write_all(error_message.as_bytes()).await?;
+            }
+        }
+        return Ok(());
+    }
+
     async fn parse_params(
         &mut self,
         command: &str,
@@ -146,93 +256,5 @@ impl Session {
         out += "\r\n";
         self.stream.write_all(out.as_bytes()).await?;
         return Ok(());
-    }
-
-    pub async fn run(&mut self) -> std::io::Result<()> {
-        self.stream
-            .write_all(b"welcome to analog3 mission control\r\n")
-            .await?;
-
-        loop {
-            self.stream.write_all(b"analog3> ").await?;
-            let mut line = String::new();
-            match self.stream.read_line(&mut line).await? {
-                0 => {
-                    log::debug!("Connection closed");
-                    return Ok(());
-                }
-                _ => {
-                    let trimmed = line.trim().to_string();
-                    log::debug!("Received: {}", trimmed);
-                    let tokens: Vec<String> = trimmed.split(" ").map(str::to_string).collect();
-                    if tokens.is_empty() {
-                        // do nothing
-                        continue;
-                    }
-                    let command = tokens[0].trim();
-                    match command {
-                        "hello" => {
-                            self.stream.write_all(b"hi\r\n").await?;
-                        }
-                        "hi" => {
-                            let (tx, rx) = oneshot::channel();
-                            let command = Command::Hi { resp: tx };
-                            self.command_tx.send(command).await.unwrap();
-                            match rx.await {
-                                Ok(response) => {
-                                    self.stream.write_all(response.as_bytes()).await?;
-                                }
-                                Err(e) => {
-                                    log::warn!("Operation failed: {:?}", e);
-                                    self.stream.write_all(b"error\r\n").await?;
-                                }
-                            }
-                        }
-                        "list" => self.list().await?,
-                        "ping" => self.ping(command, &tokens).await?,
-                        /*
-                        "ping" => self.process(
-                            &command,
-                            Operation::Ping,
-                            &tokens,
-                            &vec![Spec::u8("id", true), Spec::bool("visual", false)],
-                        )?,
-                        "get-name" => self.get_name(&command, &tokens)?,
-                        "get-config" => self.get_config(&command, &tokens)?,
-                        "cancel-uid" => self.process(
-                            &command,
-                            Operation::RequestUidCancel,
-                            &tokens,
-                            &vec![Spec::u32("uid", true)],
-                        )?,
-                        "pretend-sign-in" => self.process(
-                            &command,
-                            Operation::PretendSignIn,
-                            &tokens,
-                            &vec![Spec::u32("uid", true)],
-                        )?,
-                        "pretend-notify-id" => self.process(
-                            &command,
-                            Operation::PretendNotifyId,
-                            &tokens,
-                            &vec![Spec::u32("uid", true), Spec::u8("id", true)],
-                        )?,
-                        */
-                        "quit" => {
-                            self.stream.write_all(b"bye!\r\n").await?;
-                            return Ok(());
-                        }
-                        "" => {
-                            // do nothing
-                        }
-                        _ => {
-                            self.stream
-                                .write_all(format!("{}: Unknown command\r\n", command).as_bytes())
-                                .await?;
-                        }
-                    }
-                }
-            }
-        }
     }
 }

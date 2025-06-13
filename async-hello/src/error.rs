@@ -13,24 +13,38 @@ pub enum ErrorType {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModuleManagementError {
+pub struct AppError {
     pub error_type: ErrorType,
     pub message: String,
 }
 
-impl fmt::Display for ModuleManagementError {
+impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}; {}", self.error_type, self.message)
     }
 }
 
-impl std::error::Error for ModuleManagementError {}
+impl std::error::Error for AppError {}
 
-impl ModuleManagementError {
+impl AppError {
     pub fn new(error_type: ErrorType, message: String) -> Self {
         Self {
             error_type,
             message,
+        }
+    }
+
+    pub fn timeout() -> Self {
+        Self {
+            error_type: ErrorType::Timeout,
+            message: "".to_string(),
+        }
+    }
+
+    pub fn runtime(message: &str) -> Self {
+        Self {
+            error_type: ErrorType::RuntimeError,
+            message: message.to_string(),
         }
     }
 }

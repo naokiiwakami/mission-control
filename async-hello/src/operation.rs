@@ -2,19 +2,22 @@ use tokio::sync::oneshot;
 
 use crate::a3_modules::A3Module;
 use crate::analog3::Value;
-use crate::error::ModuleManagementError;
+use crate::error::AppError;
 
 #[derive(Debug)]
 pub enum Command {
     List {
-        resp: oneshot::Sender<Result<Vec<A3Module>, ModuleManagementError>>,
+        resp: oneshot::Sender<Result<Vec<A3Module>, AppError>>,
     },
     Ping {
         id: u8,
         enable_visual: bool,
-        resp: oneshot::Sender<Result<(), ModuleManagementError>>,
+        resp: oneshot::Sender<Result<(), AppError>>,
     },
-    GetName,
+    GetName {
+        id: u8,
+        resp: oneshot::Sender<Result<String, AppError>>,
+    },
     AckName,
     GetConfig,
     AckConfig,
@@ -44,4 +47,4 @@ pub struct Response {
     pub stream_id: u8,
 }
 
-pub type OperationResult = Result<Response, ModuleManagementError>;
+pub type OperationResult = Result<Response, AppError>;

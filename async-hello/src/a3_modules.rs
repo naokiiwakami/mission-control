@@ -8,7 +8,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::error::ModuleManagementError;
+use crate::error::AppError;
 
 #[derive(Debug, Clone)]
 pub struct A3Module {
@@ -21,14 +21,14 @@ pub struct A3Module {
 pub enum Operation {
     GetOrCreateIdByUid {
         uid: u32,
-        resp: oneshot::Sender<Result<u8, ModuleManagementError>>,
+        resp: oneshot::Sender<Result<u8, AppError>>,
     },
     Register {
         uid: u32,
         id: u8,
     },
     List {
-        resp: oneshot::Sender<Result<Vec<A3Module>, ModuleManagementError>>,
+        resp: oneshot::Sender<Result<Vec<A3Module>, AppError>>,
     },
 }
 
