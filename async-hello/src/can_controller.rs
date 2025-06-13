@@ -7,6 +7,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+#[derive(Debug)]
 pub struct CanMessage {
     pub message: *mut can_message_t,
     message_attached: bool,

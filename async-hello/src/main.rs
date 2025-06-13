@@ -8,10 +8,8 @@ pub mod operation;
 pub mod user_session;
 
 use env_logger::Env;
-use tokio::sync::mpsc::Sender;
 
 use crate::module_manager::ModuleManager;
-use crate::operation::{OperationResult, Response};
 
 #[tokio::main]
 async fn main() {

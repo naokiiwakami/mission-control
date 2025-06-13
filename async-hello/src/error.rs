@@ -1,5 +1,4 @@
 use std::fmt;
-use std::fmt::Write;
 
 #[derive(Debug, Clone)]
 pub enum ErrorType {
@@ -9,6 +8,7 @@ pub enum ErrorType {
     UserCommandUnknown,
     UserCommandStreamIdMissing,
     UserCommandInvalidRequest,
+    Timeout,
     RuntimeError,
 }
 
@@ -25,3 +25,12 @@ impl fmt::Display for ModuleManagementError {
 }
 
 impl std::error::Error for ModuleManagementError {}
+
+impl ModuleManagementError {
+    pub fn new(error_type: ErrorType, message: String) -> Self {
+        Self {
+            error_type,
+            message,
+        }
+    }
+}

@@ -7,9 +7,13 @@ use crate::error::ModuleManagementError;
 #[derive(Debug)]
 pub enum Command {
     List {
-        resp: oneshot::Sender<Vec<A3Module>>,
+        resp: oneshot::Sender<Result<Vec<A3Module>, ModuleManagementError>>,
     },
-    Ping,
+    Ping {
+        id: u8,
+        enable_visual: bool,
+        resp: oneshot::Sender<Result<(), ModuleManagementError>>,
+    },
     GetName,
     AckName,
     GetConfig,

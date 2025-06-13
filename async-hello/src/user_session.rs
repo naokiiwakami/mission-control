@@ -1,9 +1,14 @@
-use crate::operation::{Command, OperationResult, Request};
+mod spec;
+
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+
+use crate::analog3::Value;
+use crate::operation::{Command, OperationResult, Request};
+use crate::user_session::spec::Spec;
 
 pub fn start() -> (Receiver<Command>, JoinHandle<()>) {
     let (command_tx, command_rx) = channel(8);
@@ -43,7 +48,7 @@ impl Session {
         let (tx, rx) = oneshot::channel();
         let command = Command::List { resp: tx };
         self.command_tx.send(command).await.unwrap();
-        match rx.await {
+        match rx.await.unwrap() {
             Ok(response) => {
                 let reply = response
                     .iter()
@@ -59,6 +64,82 @@ impl Session {
                 self.stream.write_all(b"error\r\n").await?;
             }
         }
+        return Ok(());
+    }
+
+    async fn ping(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        let specs = vec![Spec::u8("id", true), Spec::bool("visual", false)];
+        let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
+            return Ok(());
+        };
+
+        let (tx, rx) = oneshot::channel();
+        let id = params[0].as_u8().unwrap();
+        let enable_visual = if params.len() > 1 {
+            params[1].as_bool().unwrap()
+        } else {
+            false
+        };
+        let command = Command::Ping {
+            id,
+            enable_visual,
+            resp: tx,
+        };
+        self.command_tx.send(command).await.unwrap();
+        self.stream
+            .write_all(format!("ping to id {:02x} ...", id).as_bytes())
+            .await?;
+        match rx.await.unwrap() {
+            Ok(()) => {
+                self.stream.write_all(" ok\r\n".as_bytes()).await?;
+            }
+            Err(e) => {
+                log::warn!("Operation failed: {:?}", e);
+                self.stream.write_all(b"error\r\n").await?;
+            }
+        }
+        return Ok(());
+    }
+
+    async fn parse_params(
+        &mut self,
+        command: &str,
+        tokens: &Vec<String>,
+        specs: &Vec<Spec>,
+    ) -> std::io::Result<Option<Vec<Value>>> {
+        let mut params = Vec::new();
+        for (i, spec) in specs.iter().enumerate() {
+            if tokens.len() <= i + 1 {
+                if spec.required {
+                    self.usage(command, specs).await?;
+                    return Ok(None);
+                }
+                break;
+            }
+            if let Ok(param) = (spec.parse)(&tokens[i + 1]) {
+                params.push(param);
+            } else {
+                self.stream
+                    .write_all(format!("Invalid {}\r\n", spec.name).as_bytes())
+                    .await?;
+                return Ok(None);
+            }
+        }
+        return Ok(Some(params));
+    }
+
+    async fn usage(&mut self, command: &str, specs: &Vec<Spec>) -> std::io::Result<()> {
+        let mut out = String::new();
+        out += format!("Usage {}", command).as_str();
+        for spec in specs {
+            if spec.required {
+                out += format!(" <{}>", spec.name).as_str();
+            } else {
+                out += format!(" [{}]", spec.name).as_str();
+            }
+        }
+        out += "\r\n";
+        self.stream.write_all(out.as_bytes()).await?;
         return Ok(());
     }
 
@@ -102,9 +183,8 @@ impl Session {
                                 }
                             }
                         }
-                        "list" => {
-                            self.list().await?;
-                        }
+                        "list" => self.list().await?,
+                        "ping" => self.ping(command, &tokens).await?,
                         /*
                         "ping" => self.process(
                             &command,

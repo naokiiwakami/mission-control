@@ -45,6 +45,17 @@ pub const A3_IM_REPLY_CONFIG: u8 = 0x03;
 
 pub const A3_DATA_LENGTH: u8 = 8;
 
+#[derive(Debug, Clone)]
+pub struct TypeError {}
+
+impl fmt::Display for TypeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "invalid value type")
+    }
+}
+
+impl std::error::Error for TypeError {}
+
 #[derive(Debug)]
 pub enum Value {
     U8(u8),
@@ -52,6 +63,22 @@ pub enum Value {
     U32(u32),
     Text(String),
     Bool(bool),
+}
+
+impl Value {
+    pub fn as_u8(&self) -> std::result::Result<u8, TypeError> {
+        let Value::U8(value) = self else {
+            return Err(TypeError {});
+        };
+        return Ok(*value);
+    }
+
+    pub fn as_bool(&self) -> std::result::Result<bool, TypeError> {
+        let Value::Bool(value) = self else {
+            return Err(TypeError {});
+        };
+        return Ok(*value);
+    }
 }
 
 #[derive(Debug, Clone)]
