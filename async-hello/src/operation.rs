@@ -22,13 +22,22 @@ pub enum Command {
         id: u8,
         resp: oneshot::Sender<Result<Vec<Property>, AppError>>,
     },
-    RequestUidCancel,
+    RequestUidCancel {
+        uid: u32,
+        resp: oneshot::Sender<Result<(), AppError>>,
+    },
     // for testing and debugging
-    PretendSignIn,
-    PretendNotifyId,
-    // internal diag
     Hi {
         resp: oneshot::Sender<Result<String, AppError>>,
+    },
+    PretendSignIn {
+        uid: u32,
+        resp: oneshot::Sender<Result<(), AppError>>,
+    },
+    PretendNotifyId {
+        uid: u32,
+        id: u8,
+        resp: oneshot::Sender<Result<(), AppError>>,
     },
 }
 

@@ -78,26 +78,9 @@ impl Session {
                         "ping" => self.ping(command, &tokens).await?,
                         "get-name" => self.get_name(&command, &tokens).await?,
                         "get-config" => self.get_config(&command, &tokens).await?,
-                        /*
-                        "cancel-uid" => self.process(
-                            &command,
-                            Operation::RequestUidCancel,
-                            &tokens,
-                            &vec![Spec::u32("uid", true)],
-                        )?,
-                        "pretend-sign-in" => self.process(
-                            &command,
-                            Operation::PretendSignIn,
-                            &tokens,
-                            &vec![Spec::u32("uid", true)],
-                        )?,
-                        "pretend-notify-id" => self.process(
-                            &command,
-                            Operation::PretendNotifyId,
-                            &tokens,
-                            &vec![Spec::u32("uid", true), Spec::u8("id", true)],
-                        )?,
-                        */
+                        "cancel-uid" => self.cancel_uid(&command, &tokens).await?,
+                        "pretend-sign-in" => self.pretend_sign_in(&command, &tokens).await?,
+                        "pretend-notify-id" => self.pretend_notify_id(&command, &tokens).await?,
                         "quit" => {
                             self.stream.write_all(b"bye!\r\n").await?;
                             return Ok(());
@@ -159,10 +142,10 @@ impl Session {
         };
         self.command_tx.send(command).await.unwrap();
         self.stream
-            .write_all(format!("ping to id {:02x} ...", id).as_bytes())
+            .write_all(format!("ping to id {:02x} ... ", id).as_bytes())
             .await?;
         return self
-            .wait_and_handle_response(resp_rx, |_| " ok".to_string())
+            .wait_and_handle_response(resp_rx, |_| "ok".to_string())
             .await;
     }
 
@@ -224,6 +207,77 @@ impl Session {
             .await;
     }
 
+    async fn cancel_uid(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        let specs = vec![Spec::u32("uid", true)];
+        let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
+            return Ok(());
+        };
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let uid = params[0].as_u32().unwrap();
+        let command = Command::RequestUidCancel { uid, resp: resp_tx };
+        self.command_tx.send(command).await.unwrap();
+        self.stream
+            .write_all(format!("request UID cancellation: {:08x} ... ", uid).as_bytes())
+            .await?;
+        return self
+            .wait_and_handle_response(resp_rx, |_| "sent".to_string())
+            .await;
+    }
+
+    async fn pretend_sign_in(
+        &mut self,
+        command: &str,
+        tokens: &Vec<String>,
+    ) -> std::io::Result<()> {
+        let specs = vec![Spec::u32("uid", true)];
+        let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
+            return Ok(());
+        };
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let uid = params[0].as_u32().unwrap();
+        let command = Command::PretendSignIn { uid, resp: resp_tx };
+        self.command_tx.send(command).await.unwrap();
+        self.stream
+            .write_all(format!("pseudo sign-in with UID {:08x} ... ", uid).as_bytes())
+            .await?;
+        return self
+            .wait_and_handle_response(resp_rx, |_| "sent".to_string())
+            .await;
+    }
+
+    async fn pretend_notify_id(
+        &mut self,
+        command: &str,
+        tokens: &Vec<String>,
+    ) -> std::io::Result<()> {
+        let specs = vec![Spec::u32("uid", true), Spec::u8("id", true)];
+        let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
+            return Ok(());
+        };
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let uid = params[0].as_u32().unwrap();
+        let id = params[1].as_u8().unwrap();
+        let command = Command::PretendNotifyId {
+            uid,
+            id,
+            resp: resp_tx,
+        };
+        self.command_tx.send(command).await.unwrap();
+        self.stream
+            .write_all(
+                format!("pseudo notify-id with UID {:08x} ID {:02x} ... ", uid, id).as_bytes(),
+            )
+            .await?;
+        return self
+            .wait_and_handle_response(resp_rx, |_| "sent".to_string())
+            .await;
+    }
+
+    // Utilities ////////////////////////////////////////////////////////////////
+
     async fn parse_params(
         &mut self,
         command: &str,
@@ -284,8 +338,8 @@ impl Session {
             Err(e) => {
                 log::warn!("Operation failed: {:?}", e);
                 let error_message = match e.error_type {
-                    ErrorType::Timeout => " timeout\r\n",
-                    _ => " error\r\n",
+                    ErrorType::Timeout => "timeout\r\n",
+                    _ => "error\r\n",
                 };
                 self.stream.write_all(error_message.as_bytes()).await?;
             }

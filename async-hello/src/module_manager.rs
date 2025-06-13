@@ -148,9 +148,9 @@ impl ModuleManager {
             } => self.ping(id, enable_visual, resp),
             Command::GetName { id, resp } => self.get_name(id, resp),
             Command::GetConfig { id, resp } => self.get_config(id, resp),
-            _ => {
-                log::error!("Operation not implemented: {:?}", command);
-            }
+            Command::RequestUidCancel { uid, resp } => self.request_uid_cancel(uid, resp),
+            Command::PretendSignIn { uid, resp } => self.pretend_sign_in(uid, resp),
+            Command::PretendNotifyId { uid, id, resp } => self.pretend_notify_id(uid, id, resp),
         }
     }
 
@@ -215,6 +215,30 @@ impl ModuleManager {
             }
 
             terminate_stream(streams_tx, id).await;
+        });
+    }
+
+    fn request_uid_cancel(&mut self, uid: u32, resp: oneshot::Sender<Result<()>>) {
+        let can_tx = self.can_tx.clone();
+        tokio::spawn(async move {
+            a3_message::request_uid_cancel(can_tx, uid).await;
+            resp.send(Ok(())).unwrap();
+        });
+    }
+
+    fn pretend_sign_in(&mut self, uid: u32, resp: oneshot::Sender<Result<()>>) {
+        let can_tx = self.can_tx.clone();
+        tokio::spawn(async move {
+            a3_message::im_sign_in(can_tx, uid).await;
+            resp.send(Ok(())).unwrap();
+        });
+    }
+
+    fn pretend_notify_id(&mut self, uid: u32, id: u8, resp: oneshot::Sender<Result<()>>) {
+        let can_tx = self.can_tx.clone();
+        tokio::spawn(async move {
+            a3_message::im_notify_id(can_tx, uid, id).await;
+            resp.send(Ok(())).unwrap();
         });
     }
 }

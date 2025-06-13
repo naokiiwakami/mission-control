@@ -52,6 +52,23 @@ pub async fn continue_config(can_tx: Sender<CanMessage>, remote_id: u8) {
     send_op_and_id(can_tx, a3::A3_MC_CONTINUE_CONFIG, remote_id).await;
 }
 
+pub async fn request_uid_cancel(can_tx: Sender<CanMessage>, uid: u32) {
+    let out_message = make_op_with_uid(uid, a3::A3_ADMIN_REQ_UID_CANCEL);
+    can_tx.send(out_message).await.unwrap();
+}
+
+pub async fn im_sign_in(can_tx: Sender<CanMessage>, uid: u32) {
+    let out_message = make_op_with_uid(uid, a3::A3_ADMIN_SIGN_IN);
+    can_tx.send(out_message).await.unwrap();
+}
+
+pub async fn im_notify_id(can_tx: Sender<CanMessage>, uid: u32, id: u8) {
+    let mut out_message = make_op_with_uid(uid, a3::A3_ADMIN_SIGN_IN);
+    out_message.set_data(1, id);
+    out_message.set_data_length(2);
+    can_tx.send(out_message).await.unwrap();
+}
+
 async fn send_op_and_id(can_tx: Sender<CanMessage>, opcode: u8, remote_id: u8) {
     let mut out_message = CanMessage::new();
     out_message.set_id(a3::A3_ID_MISSION_CONTROL);
@@ -59,4 +76,13 @@ async fn send_op_and_id(can_tx: Sender<CanMessage>, opcode: u8, remote_id: u8) {
     out_message.set_data(0, opcode);
     out_message.set_data(1, remote_id);
     can_tx.send(out_message).await.unwrap();
+}
+
+fn make_op_with_uid(uid: u32, opcode: u8) -> CanMessage {
+    let mut out_message = CanMessage::new();
+    out_message.set_id(uid);
+    out_message.set_extended(true);
+    out_message.set_data_length(1);
+    out_message.set_data(0, opcode);
+    return out_message;
 }
