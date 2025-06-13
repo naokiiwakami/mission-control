@@ -154,9 +154,9 @@ impl ModuleManager {
         }
     }
 
-    fn hi(&mut self, resp: oneshot::Sender<String>) {
+    fn hi(&mut self, resp: oneshot::Sender<Result<String>>) {
         tokio::spawn(async {
-            resp.send("hello\r\n".to_string()).unwrap();
+            resp.send(Ok("hello".to_string())).unwrap();
         });
     }
 
@@ -218,7 +218,7 @@ async fn ping_core(
     // ping
     a3_message::ping(can_tx, id, enable_visual).await;
 
-    // wait for the response and
+    // wait for the response
     return match timeout(Duration::from_secs(10), stream_resp_rx).await {
         Ok(_) => Ok(()),
         Err(_) => Err(AppError::timeout()),

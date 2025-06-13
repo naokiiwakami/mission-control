@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::analog3::Value;
-use crate::error::ErrorType;
+use crate::error::{AppError, ErrorType};
 use crate::operation::Command;
 use crate::user_session::spec::Spec;
 
@@ -71,20 +71,7 @@ impl Session {
                         "hello" => {
                             self.stream.write_all(b"hi\r\n").await?;
                         }
-                        "hi" => {
-                            let (tx, rx) = oneshot::channel();
-                            let command = Command::Hi { resp: tx };
-                            self.command_tx.send(command).await.unwrap();
-                            match rx.await {
-                                Ok(response) => {
-                                    self.stream.write_all(response.as_bytes()).await?;
-                                }
-                                Err(e) => {
-                                    log::warn!("Operation failed: {:?}", e);
-                                    self.stream.write_all(b"error\r\n").await?;
-                                }
-                            }
-                        }
+                        "hi" => self.hi().await?,
                         "list" => self.list().await?,
                         "ping" => self.ping(command, &tokens).await?,
                         "get-name" => self.get_name(&command, &tokens).await?,
@@ -127,27 +114,27 @@ impl Session {
         }
     }
 
-    async fn list(&mut self) -> std::io::Result<()> {
-        let (tx, rx) = oneshot::channel();
-        let command = Command::List { resp: tx };
+    async fn hi(&mut self) -> std::io::Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let command = Command::Hi { resp: resp_tx };
         self.command_tx.send(command).await.unwrap();
-        match rx.await.unwrap() {
-            Ok(response) => {
+        return self.wait_and_handle_response(resp_rx, |r| r).await;
+    }
+
+    async fn list(&mut self) -> std::io::Result<()> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let command = Command::List { resp: resp_tx };
+        self.command_tx.send(command).await.unwrap();
+        return self
+            .wait_and_handle_response(resp_rx, |response| {
                 let reply = response
                     .iter()
                     .map(|m| format!("uid {:08x} id {:02x}", m.uid, m.id))
                     .collect::<Vec<_>>()
                     .join("\r\n");
-                self.stream
-                    .write_all(format!("{}\r\n", reply).as_bytes())
-                    .await?;
-            }
-            Err(e) => {
-                log::warn!("Operation failed: {:?}", e);
-                self.stream.write_all(b"error\r\n").await?;
-            }
-        }
-        return Ok(());
+                return reply;
+            })
+            .await;
     }
 
     async fn ping(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
@@ -156,7 +143,7 @@ impl Session {
             return Ok(());
         };
 
-        let (tx, rx) = oneshot::channel();
+        let (resp_tx, resp_rx) = oneshot::channel();
         let id = params[0].as_u8().unwrap();
         let enable_visual = if params.len() > 1 {
             params[1].as_bool().unwrap()
@@ -166,26 +153,15 @@ impl Session {
         let command = Command::Ping {
             id,
             enable_visual,
-            resp: tx,
+            resp: resp_tx,
         };
         self.command_tx.send(command).await.unwrap();
         self.stream
             .write_all(format!("ping to id {:02x} ...", id).as_bytes())
             .await?;
-        match rx.await.unwrap() {
-            Ok(()) => {
-                self.stream.write_all(" ok\r\n".as_bytes()).await?;
-            }
-            Err(e) => {
-                log::warn!("Operation failed: {:?}", e);
-                let error_message = match e.error_type {
-                    ErrorType::Timeout => " timeout\r\n",
-                    _ => " error\r\n",
-                };
-                self.stream.write_all(error_message.as_bytes()).await?;
-            }
-        }
-        return Ok(());
+        return self
+            .wait_and_handle_response(resp_rx, |_| " ok".to_string())
+            .await;
     }
 
     async fn get_name(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
@@ -194,26 +170,12 @@ impl Session {
             return Ok(());
         };
 
-        let (tx, rx) = oneshot::channel();
+        let (resp_tx, resp_rx) = oneshot::channel();
         let id = params[0].as_u8().unwrap();
-        let command = Command::GetName { id, resp: tx };
+        let command = Command::GetName { id, resp: resp_tx };
         self.command_tx.send(command).await.unwrap();
-        match rx.await.unwrap() {
-            Ok(name) => {
-                self.stream
-                    .write_all(format!("{}\r\n", name).as_bytes())
-                    .await?;
-            }
-            Err(e) => {
-                log::warn!("Operation failed: {:?}", e);
-                let error_message = match e.error_type {
-                    ErrorType::Timeout => " timeout\r\n",
-                    _ => " error\r\n",
-                };
-                self.stream.write_all(error_message.as_bytes()).await?;
-            }
-        }
-        return Ok(());
+
+        return self.wait_and_handle_response(resp_rx, |r| r).await;
     }
 
     async fn parse_params(
@@ -255,6 +217,33 @@ impl Session {
         }
         out += "\r\n";
         self.stream.write_all(out.as_bytes()).await?;
+        return Ok(());
+    }
+
+    async fn wait_and_handle_response<T, F>(
+        &mut self,
+        resp_rx: oneshot::Receiver<Result<T, AppError>>,
+        stringify: F,
+    ) -> std::io::Result<()>
+    where
+        F: Fn(T) -> String,
+    {
+        match resp_rx.await.unwrap() {
+            Ok(response) => {
+                let reply = stringify(response);
+                self.stream
+                    .write_all(format!("{}\r\n", reply).as_bytes())
+                    .await?;
+            }
+            Err(e) => {
+                log::warn!("Operation failed: {:?}", e);
+                let error_message = match e.error_type {
+                    ErrorType::Timeout => " timeout\r\n",
+                    _ => " error\r\n",
+                };
+                self.stream.write_all(error_message.as_bytes()).await?;
+            }
+        }
         return Ok(());
     }
 }

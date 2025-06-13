@@ -28,7 +28,7 @@ pub enum Command {
     PretendNotifyId,
     // internal diag
     Hi {
-        resp: oneshot::Sender<String>,
+        resp: oneshot::Sender<Result<String, AppError>>,
     },
 }
 
