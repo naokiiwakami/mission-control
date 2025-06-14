@@ -153,7 +153,7 @@ lazy_static! {
         };
         l[1] = Attribute {
             name: String::from("module_type"),
-            kind: ValueType::U8,
+            kind: ValueType::U16,
         };
         l[2] = Attribute {
             name: String::from("name"),
@@ -330,7 +330,7 @@ impl ChunkBuilder {
 
     pub fn data(&mut self, data: &[u8], data_length: usize) -> Result<bool> {
         let Some(chunk) = self.chunk.as_mut() else {
-            return error("ChunkBuilder: Built already. The build cannot be used twice.");
+            return error("ChunkBuilder: Built already. The builder cannot be used twice.");
         };
         if self.num_fields_read && chunk.len() == self.target_num_fields {
             return error("ChunkBuilder: Data overflow.");
