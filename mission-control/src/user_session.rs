@@ -11,7 +11,7 @@ use tokio::{
 };
 
 use crate::{
-    analog3::{ATTRIBUTES, Value},
+    analog3::config::{ATTRIBUTES, Value},
     command::Command,
     error::{AppError, ErrorType},
     user_session::spec::Spec,

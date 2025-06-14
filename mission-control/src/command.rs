@@ -2,7 +2,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     a3_modules::A3Module,
-    analog3::{Property, Value},
+    analog3::config::{Property, Value},
     error::AppError,
 };
 

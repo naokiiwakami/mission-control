@@ -1,4 +1,4 @@
-use crate::analog3::Value;
+use crate::analog3::config::Value;
 
 pub struct ParseParamError {}
 
