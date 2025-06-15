@@ -10,7 +10,7 @@ use walkdir::WalkDir;
 use super::config::Value;
 
 #[cfg(not(test))]
-use log::{error, info, warn};
+use log::error;
 
 /// Analog3 module configuration value types
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -148,11 +148,7 @@ lazy_static! {
 
         def
     };
-    pub static ref MODULES_SCHEMA: BTreeMap<u16, ModuleDef> = {
-        let mut schema = load_schema("schema");
-
-        schema
-    };
+    pub static ref MODULES_SCHEMA: BTreeMap<u16, ModuleDef> = load_schema("schema");
     pub static ref ATTRIBUTES: [PropertyDef; 256] = {
         let mut l = core::array::from_fn(|_| PropertyDef {
             id: 0,
@@ -218,6 +214,8 @@ pub fn load_schema<P: AsRef<Path>>(directory: P) -> BTreeMap<u16, ModuleDef> {
 
 #[cfg(test)]
 use std::eprintln as error;
+
+#[cfg(test)]
 
 mod tests {
     use super::*;
