@@ -10,8 +10,10 @@ use tokio::{
 use crate::{
     a3_message,
     a3_modules::{self, A3Module},
-    analog3::config::{ChunkBuilder, Property},
-    analog3::{self as a3},
+    analog3::{
+        self as a3, A3_ID_INDIVIDUAL_MODULE_BASE,
+        config::{ChunkBuilder, Property},
+    },
     can_controller::CanMessage,
     command::Command,
     error::AppError,
@@ -129,12 +131,12 @@ impl MissionControl {
         let op_name = String::from(op_name_src);
         tokio::spawn(async move {
             let remote_id = in_message.id();
-            let stream_id = (remote_id - a3::A3_ID_INDIVIDUAL_MODULE_BASE) as u8;
+            let stream_id = remote_id;
             log::debug!("{} reply received; id {:02x}", op_name, remote_id);
             let (get_resp_tx, get_resp_rx) = oneshot::channel();
             streams_tx
                 .send(streams::Operation::Get {
-                    remote_id: stream_id,
+                    stream_id,
                     op_resp: get_resp_tx,
                 })
                 .await
@@ -206,7 +208,7 @@ impl MissionControl {
                 log::error!("Error in sending back the ping result: {:?}", e);
             }
 
-            terminate_stream(streams_tx, id).await;
+            terminate_stream(streams_tx, id as u32 + A3_ID_INDIVIDUAL_MODULE_BASE).await;
         });
     }
 
@@ -219,7 +221,7 @@ impl MissionControl {
                 log::error!("Error in sending back the get-name result: {:?}", e);
             }
 
-            terminate_stream(streams_tx, id).await;
+            terminate_stream(streams_tx, id as u32 + A3_ID_INDIVIDUAL_MODULE_BASE).await;
         });
     }
 
@@ -232,7 +234,7 @@ impl MissionControl {
                 log::error!("Error in sending back the get-name result: {:?}", e);
             }
 
-            terminate_stream(streams_tx, id).await;
+            terminate_stream(streams_tx, id as u32 + A3_ID_INDIVIDUAL_MODULE_BASE).await;
         });
     }
 
@@ -267,8 +269,10 @@ async fn ping_core(
     id: u8,
     enable_visual: bool,
 ) -> Result<()> {
+    let stream_id = id as u32 + A3_ID_INDIVIDUAL_MODULE_BASE;
+
     // start a stream
-    let stream_resp_rx = start_stream(streams_tx.clone(), id).await?;
+    let stream_resp_rx = start_stream(streams_tx.clone(), stream_id).await?;
 
     // ping
     a3_message::ping(can_tx, id, enable_visual).await;
@@ -285,8 +289,10 @@ async fn get_name_core(
     can_tx: Sender<CanMessage>,
     id: u8,
 ) -> Result<String> {
+    let stream_id = id as u32 + A3_ID_INDIVIDUAL_MODULE_BASE;
+
     // start a stream
-    let mut stream_resp_rx = Some(start_stream(streams_tx.clone(), id).await?);
+    let mut stream_resp_rx = Some(start_stream(streams_tx.clone(), stream_id).await?);
 
     // send request message
     a3_message::request_name(can_tx.clone(), id).await;
@@ -311,7 +317,7 @@ async fn get_name_core(
                     let name = properties[0].get_value_as_string().unwrap();
                     return Ok(name);
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), id).await?);
+                stream_resp_rx.replace(continue_stream(streams_tx.clone(), stream_id).await?);
                 a3_message::continue_name(can_tx.clone(), id).await;
             }
             Err(e) => {
@@ -327,8 +333,10 @@ async fn get_config_core(
     can_tx: Sender<CanMessage>,
     id: u8,
 ) -> Result<Vec<Property>> {
+    let stream_id = id as u32 + A3_ID_INDIVIDUAL_MODULE_BASE;
+
     // start a stream
-    let mut stream_resp_rx = Some(start_stream(streams_tx.clone(), id).await?);
+    let mut stream_resp_rx = Some(start_stream(streams_tx.clone(), stream_id).await?);
 
     // send request message
     a3_message::request_config(can_tx.clone(), id).await;
@@ -352,7 +360,7 @@ async fn get_config_core(
                     let properties = chunk_builder.build().unwrap();
                     return Ok(properties);
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), id).await?);
+                stream_resp_rx.replace(continue_stream(streams_tx.clone(), stream_id).await?);
                 a3_message::continue_config(can_tx.clone(), id).await;
             }
             Err(e) => {
@@ -365,34 +373,34 @@ async fn get_config_core(
 
 async fn start_stream(
     streams_tx: Sender<streams::Operation>,
-    remote_id: u8,
+    stream_id: u32,
 ) -> Result<oneshot::Receiver<CanMessage>> {
-    return start_or_continue_stream(streams_tx, remote_id, true).await;
+    return start_or_continue_stream(streams_tx, stream_id, true).await;
 }
 
 async fn continue_stream(
     streams_tx: Sender<streams::Operation>,
-    remote_id: u8,
+    stream_id: u32,
 ) -> Result<oneshot::Receiver<CanMessage>> {
-    return start_or_continue_stream(streams_tx, remote_id, false).await;
+    return start_or_continue_stream(streams_tx, stream_id, false).await;
 }
 
 async fn start_or_continue_stream(
     streams_tx: Sender<streams::Operation>,
-    remote_id: u8,
+    stream_id: u32,
     is_start: bool,
 ) -> Result<oneshot::Receiver<CanMessage>> {
     let (start_resp_tx, start_resp_rx) = oneshot::channel();
     let (stream_resp_tx, stream_resp_rx) = oneshot::channel();
     let operation = if is_start {
         streams::Operation::Start {
-            remote_id,
+            stream_id,
             op_resp: start_resp_tx,
             stream_resp: stream_resp_tx,
         }
     } else {
         streams::Operation::Continue {
-            remote_id,
+            stream_id,
             op_resp: start_resp_tx,
             stream_resp: stream_resp_tx,
         }
@@ -414,11 +422,11 @@ async fn start_or_continue_stream(
     return Ok(stream_resp_rx);
 }
 
-async fn terminate_stream(streams_tx: Sender<streams::Operation>, id: u8) {
+async fn terminate_stream(streams_tx: Sender<streams::Operation>, stream_id: u32) {
     let (term_resp_tx, term_resp_rx) = oneshot::channel();
     streams_tx
         .send(streams::Operation::Terminate {
-            remote_id: id,
+            stream_id,
             op_resp: term_resp_tx,
         })
         .await

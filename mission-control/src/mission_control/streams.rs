@@ -14,21 +14,21 @@ type Result<T> = std::result::Result<T, StreamError>;
 
 pub enum Operation {
     Start {
-        remote_id: u8,
+        stream_id: u32,
         op_resp: oneshot::Sender<Result<()>>,
         stream_resp: oneshot::Sender<CanMessage>,
     },
     Get {
-        remote_id: u8,
+        stream_id: u32,
         op_resp: oneshot::Sender<Result<oneshot::Sender<CanMessage>>>,
     },
     Continue {
-        remote_id: u8,
+        stream_id: u32,
         op_resp: oneshot::Sender<Result<()>>,
         stream_resp: oneshot::Sender<CanMessage>,
     },
     Terminate {
-        remote_id: u8,
+        stream_id: u32,
         op_resp: oneshot::Sender<Result<()>>,
     },
 }
@@ -80,25 +80,25 @@ pub fn start() -> (Sender<Operation>, JoinHandle<()>) {
 }
 
 async fn handle_requests(mut operation_rx: Receiver<Operation>) {
-    let mut streams = HashMap::<u8, Stream>::new();
+    let mut streams = HashMap::<u32, Stream>::new();
     loop {
         if let Some(request) = operation_rx.recv().await {
             match request {
                 Operation::Start {
-                    remote_id,
+                    stream_id,
                     op_resp,
                     stream_resp,
                 } => {
-                    let response = if streams.contains_key(&remote_id) {
+                    let response = if streams.contains_key(&stream_id) {
                         Err(StreamError::new(ErrorType::Busy))
                     } else {
-                        streams.insert(remote_id, Stream::new(stream_resp));
+                        streams.insert(stream_id, Stream::new(stream_resp));
                         Ok(())
                     };
                     op_resp.send(response).unwrap();
                 }
-                Operation::Get { remote_id, op_resp } => {
-                    let response = match streams.get_mut(&remote_id) {
+                Operation::Get { stream_id, op_resp } => {
+                    let response = match streams.get_mut(&stream_id) {
                         Some(stream) => match stream.stream_resp.take() {
                             Some(stream_resp) => Ok(stream_resp),
                             None => Err(StreamError::new(ErrorType::Stale)),
@@ -108,11 +108,11 @@ async fn handle_requests(mut operation_rx: Receiver<Operation>) {
                     op_resp.send(response).unwrap();
                 }
                 Operation::Continue {
-                    remote_id,
+                    stream_id,
                     op_resp,
                     stream_resp,
                 } => {
-                    let response = match streams.get_mut(&remote_id) {
+                    let response = match streams.get_mut(&stream_id) {
                         Some(stream) => {
                             stream.stream_resp.replace(stream_resp);
                             Ok(())
@@ -121,8 +121,8 @@ async fn handle_requests(mut operation_rx: Receiver<Operation>) {
                     };
                     op_resp.send(response).unwrap();
                 }
-                Operation::Terminate { remote_id, op_resp } => {
-                    let response = match streams.remove(&remote_id) {
+                Operation::Terminate { stream_id, op_resp } => {
+                    let response = match streams.remove(&stream_id) {
                         Some(_) => Ok(()),
                         None => Err(StreamError::new(ErrorType::NoSuchStream)),
                     };
