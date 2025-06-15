@@ -1,7 +1,10 @@
 use std::cmp::min;
+use std::collections::BTreeMap;
 use std::fmt;
 
-use lazy_static::lazy_static;
+use crate::analog3::{A3_PROP_MODULE_TYPE, schema::COMMON_MODULE_DEF};
+
+use super::schema::{ATTRIBUTES, MODULES_SCHEMA, ModuleDef, PropertyDef, ValueType};
 
 #[derive(Debug, Clone)]
 pub struct TypeError {}
@@ -14,13 +17,16 @@ impl fmt::Display for TypeError {
 
 impl std::error::Error for TypeError {}
 
+// Configuration data ///////////////////////////////////////////////////////
+
 #[derive(Debug)]
 pub enum Value {
     U8(u8),
     U16(u16),
     U32(u32),
     Text(String),
-    Bool(bool),
+    Boolean(bool),
+    VectorU8(Vec<u8>),
 }
 
 impl Value {
@@ -46,7 +52,7 @@ impl Value {
     }
 
     pub fn as_bool(&self) -> std::result::Result<bool, TypeError> {
-        let Value::Bool(value) = self else {
+        let Value::Boolean(value) = self else {
             return Err(TypeError {});
         };
         return Ok(*value);
@@ -58,67 +64,13 @@ impl Value {
         };
         return Ok(value.clone());
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum ValueType {
-    U8,
-    U16,
-    U32,
-    Text,
-    Bool,
-}
-
-impl ValueType {
-    pub fn to_string(&self, value: &Value) -> String {
-        return match self {
-            ValueType::U8 => value.as_u8().unwrap().to_string(),
-            ValueType::U16 => value.as_u16().unwrap().to_string(),
-            ValueType::U32 => value.as_u32().unwrap().to_string(),
-            ValueType::Text => value.as_text().unwrap(),
-            ValueType::Bool => value.as_bool().unwrap().to_string(),
+    pub fn as_vec_u8(&self) -> std::result::Result<Vec<u8>, TypeError> {
+        let Value::VectorU8(value) = self else {
+            return Err(TypeError {});
         };
+        return Ok(value.clone());
     }
-
-    pub fn to_hex(&self, value: &Value) -> String {
-        return match self {
-            ValueType::U8 => format!("{:02x}", value.as_u8().unwrap()),
-            ValueType::U16 => format!("{:04x}", value.as_u16().unwrap()),
-            ValueType::U32 => format!("{:08x}", value.as_u32().unwrap()),
-            ValueType::Text => value.as_text().unwrap(),
-            ValueType::Bool => value.as_bool().unwrap().to_string(),
-        };
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Attribute {
-    pub name: String,
-    pub kind: ValueType,
-}
-
-lazy_static! {
-    pub static ref ATTRIBUTES: [Attribute; 256] = {
-        let mut l = core::array::from_fn(|_| Attribute {
-            name: String::from(""),
-            kind: ValueType::U8,
-        });
-
-        l[0] = Attribute {
-            name: String::from("module_uid"),
-            kind: ValueType::U32,
-        };
-        l[1] = Attribute {
-            name: String::from("module_type"),
-            kind: ValueType::U16,
-        };
-        l[2] = Attribute {
-            name: String::from("name"),
-            kind: ValueType::Text,
-        };
-
-        return l;
-    };
 }
 
 #[derive(Debug, Clone)]
@@ -129,7 +81,7 @@ pub struct Property {
 }
 
 impl Property {
-    pub fn get_attribute(&self) -> Option<&Attribute> {
+    pub fn get_attribute(&self) -> Option<&PropertyDef> {
         let attr = &ATTRIBUTES[self.id as usize];
         if !attr.name.is_empty() {
             Some(attr)
@@ -140,11 +92,11 @@ impl Property {
 
     pub fn get_value(&self) -> Option<Value> {
         let attr = self.get_attribute()?;
-        Some(self.get_value_with_type(&attr.kind))
+        Some(self.get_value_with_type(&attr.value_type))
     }
 
-    pub fn get_value_with_type(&self, kind: &ValueType) -> Value {
-        let value = match kind {
+    pub fn get_value_with_type(&self, value_type: &ValueType) -> Value {
+        let value = match value_type {
             ValueType::U8 => Value::U8(self.data[0]),
             ValueType::U16 => Value::U16(((self.data[0] as u16) << 8) + self.data[1] as u16),
             ValueType::U32 => Value::U32(
@@ -154,7 +106,8 @@ impl Property {
                     + self.data[3] as u32,
             ),
             ValueType::Text => Value::Text(String::from_utf8(self.data.clone()).unwrap()),
-            ValueType::Bool => Value::Bool(self.data[0] != 0),
+            ValueType::Boolean => Value::Boolean(self.data[0] != 0),
+            ValueType::VectorU8 => Value::VectorU8(self.data.clone()),
         };
         value
     }
@@ -168,6 +121,84 @@ impl Property {
         Ok(value)
     }
 }
+
+/// Module properties with schema
+pub struct Configuration<'a> {
+    module_def: &'a ModuleDef,
+    properties: Vec<Property>,
+
+    pub module_type: u16,
+    pub module_type_name: &'a String,
+}
+
+impl<'a> Configuration<'a> {
+    pub fn new(properties: Vec<Property>) -> Self {
+        Self::with_schema(properties, &MODULES_SCHEMA)
+    }
+
+    pub fn with_schema(properties: Vec<Property>, schema: &'a BTreeMap<u16, ModuleDef>) -> Self {
+        let mut module_type = 0xffff;
+        for property in &properties {
+            if property.id == A3_PROP_MODULE_TYPE {
+                if let Ok(value) = property.get_value_with_type(&ValueType::U16).as_u16() {
+                    module_type = value;
+                } else {
+                    log::error!("Failed to read module type: Invalid data type");
+                };
+                break;
+            }
+        }
+        let module_def = match schema.get(&module_type) {
+            Some(prop_def) => prop_def,
+            None => &COMMON_MODULE_DEF,
+        };
+
+        Self {
+            module_def,
+            properties,
+
+            module_type: module_type,
+            module_type_name: &module_def.module_type_name,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.properties.len()
+    }
+
+    pub fn prop_name(&self, index: usize) -> String {
+        let property = &self.properties[index];
+        match self.module_def.properties.get(&property.id) {
+            Some(prop_def) => prop_def.name.clone(),
+            None => "unknown property".to_string(),
+        }
+    }
+
+    pub fn prop_value_as_string(&self, index: usize) -> String {
+        let property = &self.properties[index];
+        match self.module_def.properties.get(&property.id) {
+            Some(prop_def) => {
+                let value_type = &prop_def.value_type;
+                let value = property.get_value_with_type(value_type);
+
+                match &prop_def.enum_names {
+                    Some(enum_names) => {
+                        let enum_index = value.as_u8().unwrap() as usize;
+                        if enum_index < enum_names.len() {
+                            enum_names[enum_index].clone()
+                        } else {
+                            "VALUE_OUT_OF_ENUM_RANGE".to_string()
+                        }
+                    }
+                    None => value_type.to_hex(&value),
+                }
+            }
+            None => "unknown property".to_string(),
+        }
+    }
+}
+
+// Config parser ///////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
 pub struct DataParsingError {
@@ -268,7 +299,7 @@ pub struct ChunkBuilder {
     field_builder: DataFieldBuilder,
 }
 
-impl ChunkBuilder {
+impl<'a> ChunkBuilder {
     pub fn new() -> Self {
         return Self {
             chunk: Some(Vec::new()),
@@ -299,7 +330,7 @@ impl ChunkBuilder {
             self.num_fields_read = true;
             index += 1;
         }
-        while index < data_length {
+        while index < data_length && chunk.len() < self.target_num_fields {
             let (field_done, next_index) = self.field_builder.data(data, data_length, index)?;
             index = next_index;
             if field_done {
@@ -323,6 +354,7 @@ impl ChunkBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::super::schema::load_schema;
     use super::*;
 
     #[test]
@@ -409,5 +441,48 @@ mod tests {
             panic!("unexpected value type");
         };
         assert_eq!(value, "hello".to_string());
+    }
+
+    #[test]
+    fn test_load_config() {
+        let data = [
+            b"\x05\x00\x04\x1a\xce\xbe\xef",
+            b"\x01\x02\x23\x45\x02\x06m",
+            b"odule\x03\x01",
+            b"\x02\x04\x01\x01\0\0\0",
+        ];
+
+        let schema = load_schema("test-schema");
+
+        let mut builder = ChunkBuilder::new();
+        let mut index = 0;
+        loop {
+            match builder.data(data[index], 7) {
+                Ok(is_done) => {
+                    if is_done {
+                        let properties = builder.build().unwrap();
+                        let config = Configuration::with_schema(properties, &schema);
+                        assert_eq!(config.module_type, 0x2345);
+                        assert_eq!(config.module_type_name.as_str(), "test-module");
+                        assert_eq!(config.len(), 5);
+                        assert_eq!(config.prop_name(0), "module_uid");
+                        assert_eq!(config.prop_value_as_string(0), "1acebeef");
+                        assert_eq!(config.prop_name(1), "module_type");
+                        assert_eq!(config.prop_value_as_string(1), "2345");
+                        assert_eq!(config.prop_name(2), "name");
+                        assert_eq!(config.prop_value_as_string(2), "module");
+                        assert_eq!(config.prop_name(3), "num_voices");
+                        assert_eq!(config.prop_value_as_string(3), "02");
+                        assert_eq!(config.prop_name(4), "key_assign_mode");
+                        assert_eq!(config.prop_value_as_string(4), "UNISON");
+                        break;
+                    }
+                }
+                Err(e) => {
+                    panic!("Data parsing failed: {:?}", e);
+                }
+            }
+            index += 1;
+        }
     }
 }

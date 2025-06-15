@@ -1,0 +1,47 @@
+module_type: 1
+module_type_name: cv-depot
+properties:
+  - id: 3
+    name: num_voices
+    value_type: u8
+  - id: 4
+    name: key_assign_mode
+    value_type: u8
+    enum:
+      - DUOPHONIC
+      - UNISON
+      - PARALLEL
+  - id: 5
+    name: key_priority
+    value_type: u8
+    enum:
+      - LATER
+      - HIGH
+      - LOW
+  - id: 6
+    name: midi_channels
+    value_type: vector_u8
+  - id: 7
+    name: retrigger
+    value_type: boolean
+    default: off
+  - id: 8
+    name: portament_mode
+    value_type: u8
+    enum:
+      - OFF
+      - ALWAYS
+      - ON_LEGATO
+    default: OFF
+  - id: 9
+    name: portament_direction
+    value_type: u8
+    enum:
+      - BOTH
+      - UPWARDS
+      - DOWNWARDS
+    default: BOTH
+  - id: 10
+    name: portament_time
+    value_type: u8
+    default: 0

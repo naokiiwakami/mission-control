@@ -1,4 +1,5 @@
 pub mod config;
+pub mod schema;
 
 // ID assignments /////////////////////////////////
 pub const A3_ID_MIDI_TIMING_CLOCK: u32 = 0x100;
@@ -42,3 +43,8 @@ pub const A3_IM_REPLY_NAME: u8 = 0x02;
 pub const A3_IM_REPLY_CONFIG: u8 = 0x03;
 
 pub const A3_DATA_LENGTH: u8 = 8;
+
+/* Common property types */
+pub const A3_PROP_MODULE_UID: u8 = 0;
+pub const A3_PROP_MODULE_TYPE: u8 = 1;
+pub const A3_PROP_NAME: u8 = 2;

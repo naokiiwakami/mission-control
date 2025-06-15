@@ -7,13 +7,28 @@ pub mod error;
 pub mod mission_control;
 pub mod user_session;
 
+use std::io::Write;
+
 use env_logger::Env;
 
 use crate::mission_control::MissionControl;
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("debug"))
+        .format(|buf, record| {
+            let ts = buf.timestamp_millis();
+            let module_path = record.module_path().unwrap_or("<unknown>");
+            writeln!(
+                buf,
+                "[{} {:5} {}] {}",
+                ts,
+                record.level(),
+                module_path,
+                record.args()
+            )
+        })
+        .init();
     log::info!("Analog3 mission control started");
 
     // A3 Modules
