@@ -149,35 +149,6 @@ lazy_static! {
         def
     };
     pub static ref MODULES_SCHEMA: BTreeMap<u16, ModuleDef> = load_schema("schema");
-    pub static ref ATTRIBUTES: [PropertyDef; 256] = {
-        let mut l = core::array::from_fn(|_| PropertyDef {
-            id: 0,
-            name: String::from(""),
-            value_type: ValueType::U8,
-            enum_names: None,
-        });
-
-        l[0] = PropertyDef {
-            id: 0,
-            name: String::from("module_uid"),
-            value_type: ValueType::U32,
-            enum_names: None,
-        };
-        l[1] = PropertyDef {
-            id: 1,
-            name: String::from("module_type"),
-            value_type: ValueType::U16,
-            enum_names: None,
-        };
-        l[2] = PropertyDef {
-            id: 2,
-            name: String::from("name"),
-            value_type: ValueType::Text,
-            enum_names: None,
-        };
-
-        return l;
-    };
 }
 
 /// schema loader

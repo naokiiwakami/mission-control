@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::analog3::{A3_PROP_MODULE_TYPE, schema::COMMON_MODULE_DEF};
 
-use super::schema::{ATTRIBUTES, MODULES_SCHEMA, ModuleDef, PropertyDef, ValueType};
+use super::schema::{MODULES_SCHEMA, ModuleDef, ValueType};
 
 #[derive(Debug, Clone)]
 pub struct TypeError {}
@@ -81,20 +81,6 @@ pub struct Property {
 }
 
 impl Property {
-    pub fn get_attribute(&self) -> Option<&PropertyDef> {
-        let attr = &ATTRIBUTES[self.id as usize];
-        if !attr.name.is_empty() {
-            Some(attr)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_value(&self) -> Option<Value> {
-        let attr = self.get_attribute()?;
-        Some(self.get_value_with_type(&attr.value_type))
-    }
-
     pub fn get_value_with_type(&self, value_type: &ValueType) -> Value {
         let value = match value_type {
             ValueType::U8 => Value::U8(self.data[0]),
@@ -366,8 +352,7 @@ mod tests {
         let data_field = builder.build().unwrap();
         assert_eq!(data_field.id, 2);
         assert_eq!(data_field.data.as_slice(), b"hello");
-        assert_eq!(data_field.get_attribute().unwrap().name, "name".to_string());
-        let Value::Text(value) = data_field.get_value().unwrap() else {
+        let Value::Text(value) = data_field.get_value_with_type(&ValueType::Text) else {
             panic!("unexpected value type");
         };
         assert_eq!(value, "hello".to_string());
@@ -388,14 +373,13 @@ mod tests {
         let data_field1 = builder1.build().unwrap();
         assert_eq!(data_field1.data.as_slice(), b"hi");
 
-        let Value::Text(value1) = data_field1.get_value().unwrap() else {
+        let Value::Text(value1) = data_field1.get_value_with_type(&ValueType::Text) else {
             panic!("unexpected value type");
         };
         assert_eq!(value1, "hi".to_string());
 
         let data_field2 = builder2.build().unwrap();
         assert_eq!(data_field2.data.as_slice(), b"hello");
-        assert!(data_field2.get_value().is_none());
         let Value::Text(value2) = data_field2.get_value_with_type(&ValueType::Text) else {
             panic!("unexpected value type");
         };
@@ -413,12 +397,11 @@ mod tests {
         assert_eq!(chunk[0].data.as_slice(), b"hi");
         assert_eq!(chunk[1].data.as_slice(), b"hello");
 
-        let Value::Text(value0) = chunk[0].get_value().unwrap() else {
+        let Value::Text(value0) = chunk[0].get_value_with_type(&ValueType::Text) else {
             panic!("unexpected value type");
         };
         assert_eq!(value0, "hi".to_string());
 
-        assert!(chunk[1].get_value().is_none());
         let Value::Text(value1) = chunk[1].get_value_with_type(&ValueType::Text) else {
             panic!("unexpected value type");
         };
@@ -436,8 +419,7 @@ mod tests {
         let data_field = &data_fields[0];
         assert_eq!(data_field.id, 2);
         assert_eq!(data_field.data.as_slice(), b"hello");
-        assert_eq!(data_field.get_attribute().unwrap().name, "name".to_string());
-        let Value::Text(value) = data_field.get_value().unwrap() else {
+        let Value::Text(value) = data_field.get_value_with_type(&ValueType::Text) else {
             panic!("unexpected value type");
         };
         assert_eq!(value, "hello".to_string());
