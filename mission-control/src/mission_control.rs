@@ -10,7 +10,8 @@ use tokio::{
 use crate::{
     a3_message,
     a3_modules::{self, A3Module},
-    analog3::{self as a3, ChunkBuilder, Property},
+    analog3::config::{ChunkBuilder, Property},
+    analog3::{self as a3},
     can_controller::CanMessage,
     command::Command,
     error::AppError,

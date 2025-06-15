@@ -11,7 +11,7 @@ use tokio::{
 };
 
 use crate::{
-    analog3::{ATTRIBUTES, Value},
+    analog3::config::{Configuration, Value},
     command::Command,
     error::{AppError, ErrorType},
     user_session::spec::Spec,
@@ -180,20 +180,18 @@ impl Session {
 
         return self
             .wait_and_handle_response(resp_rx, |properties| {
+                let config = Configuration::new(properties);
                 // show only the common fields for now
                 let mut key_values = Vec::<(String, String)>::new();
                 let mut longest = 0;
-                for property in properties {
-                    let prop_id = property.id as usize;
-                    if prop_id <= 2 {
-                        let name = &ATTRIBUTES[prop_id].name;
-                        let value = ATTRIBUTES[prop_id]
-                            .kind
-                            .to_hex(&property.get_value().unwrap());
-                        longest = max(name.len(), longest);
-                        key_values.push((name.clone(), value));
-                    }
+
+                for i in 0..config.len() {
+                    let name = config.prop_name(i);
+                    let value = config.prop_value_as_string(i);
+                    longest = max(name.len(), longest);
+                    key_values.push((name, value));
                 }
+
                 let mut lines = Vec::<String>::new();
                 lines.push("".to_string());
                 for (name, value) in key_values {

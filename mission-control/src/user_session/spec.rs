@@ -1,4 +1,4 @@
-use crate::analog3::Value;
+use crate::analog3::config::Value;
 
 pub struct ParseParamError {}
 
@@ -88,7 +88,7 @@ impl Spec {
             required: required,
             parse: |src| {
                 return match src.trim().parse() {
-                    Ok(value) => Ok(Value::Bool(value)),
+                    Ok(value) => Ok(Value::Boolean(value)),
                     Err(_) => Err(ParseParamError {}),
                 };
             },
