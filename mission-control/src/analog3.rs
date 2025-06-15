@@ -6,6 +6,8 @@ pub const A3_ID_MIDI_TIMING_CLOCK: u32 = 0x100;
 pub const A3_ID_MIDI_VOICE_BASE: u32 = 0x101;
 pub const A3_ID_MIDI_REAL_TIME: u32 = 0x140;
 
+pub const A3_ID_ADMIN_WIRES_BASE: u32 = 0x680;
+
 pub const A3_ID_MISSION_CONTROL: u32 = 0x700;
 pub const A3_ID_INDIVIDUAL_MODULE_BASE: u32 = 0x700;
 
@@ -39,8 +41,6 @@ pub const A3_MC_CONTINUE_CONFIG: u8 = 0x07;
 
 /* Individual module opcodes */
 pub const A3_IM_REPLY_PING: u8 = 0x01;
-pub const A3_IM_REPLY_NAME: u8 = 0x02;
-pub const A3_IM_REPLY_CONFIG: u8 = 0x03;
 
 pub const A3_DATA_LENGTH: u8 = 8;
 

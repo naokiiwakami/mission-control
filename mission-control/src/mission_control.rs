@@ -10,8 +10,10 @@ use tokio::{
 use crate::{
     a3_message,
     a3_modules::{self, A3Module},
-    analog3::config::{ChunkBuilder, Property},
-    analog3::{self as a3},
+    analog3::{
+        self as a3,
+        config::{ChunkBuilder, Property},
+    },
     can_controller::CanMessage,
     command::Command,
     error::AppError,
@@ -43,35 +45,47 @@ impl MissionControl {
             log::debug!("no opcode");
             return;
         }
-        let opcode = message.get_data(0);
         if message.is_extended() {
-            return match opcode {
-                a3::A3_ADMIN_SIGN_IN => self.handle_remote_sign_in(message).unwrap(),
-                a3::A3_ADMIN_NOTIFY_ID => self.handle_remote_id_notification(message).unwrap(),
-                a3::A3_ADMIN_REQ_UID_CANCEL => self.handle_uid_cancel_req(message).unwrap(),
-                _ => {
-                    log::warn!(
-                        "Unknown opcode; id={:08x}, opcode={:02x}",
-                        message.id(),
-                        opcode
-                    );
-                    return;
-                }
-            };
+            self.handle_extended_message(message);
+        } else {
+            self.handle_standard_message(message);
         }
-        return match opcode {
-            a3::A3_IM_REPLY_PING => self.handle_stream_reply("ping", message).unwrap(),
-            a3::A3_IM_REPLY_NAME => self.handle_stream_reply("get-name", message).unwrap(),
-            a3::A3_IM_REPLY_CONFIG => self.handle_stream_reply("get-config", message).unwrap(),
+    }
+
+    fn handle_extended_message(&mut self, message: CanMessage) {
+        let opcode = message.get_data(0);
+        match opcode {
+            a3::A3_ADMIN_SIGN_IN => self.handle_remote_sign_in(message).unwrap(),
+            a3::A3_ADMIN_NOTIFY_ID => self.handle_remote_id_notification(message).unwrap(),
+            a3::A3_ADMIN_REQ_UID_CANCEL => self.handle_uid_cancel_req(message).unwrap(),
             _ => {
                 log::warn!(
                     "Unknown opcode; id={:08x}, opcode={:02x}",
                     message.id(),
                     opcode
                 );
-                return;
             }
         };
+    }
+
+    fn handle_standard_message(&mut self, message: CanMessage) {
+        let remote_id = message.id();
+        if remote_id >= a3::A3_ID_INDIVIDUAL_MODULE_BASE {
+            let opcode = message.get_data(0);
+            match opcode {
+                a3::A3_IM_REPLY_PING => self.handle_stream_reply("ping", message).unwrap(),
+                _ => {
+                    log::warn!(
+                        "Unknown opcode; id={:08x}, opcode={:02x}",
+                        message.id(),
+                        opcode
+                    );
+                }
+            };
+        } else if remote_id >= a3::A3_ID_ADMIN_WIRES_BASE {
+            self.handle_stream_reply("admin-wire", message).unwrap();
+        }
+        // else ignore
     }
 
     fn handle_remote_sign_in(&self, in_message: CanMessage) -> Result<()> {
@@ -129,12 +143,12 @@ impl MissionControl {
         let op_name = String::from(op_name_src);
         tokio::spawn(async move {
             let remote_id = in_message.id();
-            let stream_id = (remote_id - a3::A3_ID_INDIVIDUAL_MODULE_BASE) as u8;
+            let stream_id = remote_id;
             log::debug!("{} reply received; id {:02x}", op_name, remote_id);
             let (get_resp_tx, get_resp_rx) = oneshot::channel();
             streams_tx
                 .send(streams::Operation::Get {
-                    remote_id: stream_id,
+                    stream_id,
                     op_resp: get_resp_tx,
                 })
                 .await
@@ -206,7 +220,7 @@ impl MissionControl {
                 log::error!("Error in sending back the ping result: {:?}", e);
             }
 
-            terminate_stream(streams_tx, id).await;
+            terminate_stream(streams_tx, id as u32 + a3::A3_ID_INDIVIDUAL_MODULE_BASE).await;
         });
     }
 
@@ -214,12 +228,18 @@ impl MissionControl {
         let streams_tx = self.streams_tx.clone();
         let can_tx = self.can_tx.clone();
         tokio::spawn(async move {
-            let result = get_name_core(streams_tx.clone(), can_tx, id).await;
-            if let Err(e) = resp.send(result) {
-                log::error!("Error in sending back the get-name result: {:?}", e);
+            match create_wire(streams_tx.clone()).await {
+                Ok((stream_id, stream_resp_rx)) => {
+                    let result =
+                        get_name_core(streams_tx.clone(), can_tx, id, stream_id, stream_resp_rx)
+                            .await;
+                    if let Err(e) = resp.send(result) {
+                        log::error!("Error in sending back the get-name result: {:?}", e);
+                    }
+                    terminate_stream(streams_tx, stream_id).await;
+                }
+                Err(e) => resp.send(Err(e)).unwrap(),
             }
-
-            terminate_stream(streams_tx, id).await;
         });
     }
 
@@ -227,12 +247,18 @@ impl MissionControl {
         let streams_tx = self.streams_tx.clone();
         let can_tx = self.can_tx.clone();
         tokio::spawn(async move {
-            let result = get_config_core(streams_tx.clone(), can_tx, id).await;
-            if let Err(e) = resp.send(result) {
-                log::error!("Error in sending back the get-name result: {:?}", e);
+            match create_wire(streams_tx.clone()).await {
+                Ok((stream_id, stream_resp_rx)) => {
+                    let result =
+                        get_config_core(streams_tx.clone(), can_tx, id, stream_id, stream_resp_rx)
+                            .await;
+                    if let Err(e) = resp.send(result) {
+                        log::error!("Error in sending back the get-name result: {:?}", e);
+                    }
+                    terminate_stream(streams_tx, stream_id).await;
+                }
+                Err(e) => resp.send(Err(e)).unwrap(),
             }
-
-            terminate_stream(streams_tx, id).await;
         });
     }
 
@@ -267,8 +293,10 @@ async fn ping_core(
     id: u8,
     enable_visual: bool,
 ) -> Result<()> {
+    let stream_id = id as u32 + a3::A3_ID_INDIVIDUAL_MODULE_BASE;
+
     // start a stream
-    let stream_resp_rx = start_stream(streams_tx.clone(), id).await?;
+    let stream_resp_rx = start_stream(streams_tx.clone(), stream_id).await?;
 
     // ping
     a3_message::ping(can_tx, id, enable_visual).await;
@@ -284,12 +312,14 @@ async fn get_name_core(
     streams_tx: Sender<streams::Operation>,
     can_tx: Sender<CanMessage>,
     id: u8,
+    stream_id: u32,
+    init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<String> {
-    // start a stream
-    let mut stream_resp_rx = Some(start_stream(streams_tx.clone(), id).await?);
+    let mut stream_resp_rx = Some(init_stream_resp_rx);
+    let wire_id = (stream_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     // send request message
-    a3_message::request_name(can_tx.clone(), id).await;
+    a3_message::request_name(can_tx.clone(), id, wire_id).await;
 
     // control the stream
     let mut chunk_builder = ChunkBuilder::for_single_field();
@@ -304,14 +334,14 @@ async fn get_name_core(
         if size < 2 {
             return Err(AppError::runtime("zero-length data received"));
         }
-        match chunk_builder.data(&data.as_slice()[1..size], size - 1) {
+        match chunk_builder.data(&data.as_slice(), size) {
             Ok(is_done) => {
                 if is_done {
                     let properties = chunk_builder.build().unwrap();
                     let name = properties[0].get_value_as_string().unwrap();
                     return Ok(name);
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), id).await?);
+                stream_resp_rx.replace(continue_stream(streams_tx.clone(), stream_id).await?);
                 a3_message::continue_name(can_tx.clone(), id).await;
             }
             Err(e) => {
@@ -326,12 +356,14 @@ async fn get_config_core(
     streams_tx: Sender<streams::Operation>,
     can_tx: Sender<CanMessage>,
     id: u8,
+    stream_id: u32,
+    init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<Vec<Property>> {
-    // start a stream
-    let mut stream_resp_rx = Some(start_stream(streams_tx.clone(), id).await?);
+    let mut stream_resp_rx = Some(init_stream_resp_rx);
+    let wire_id = (stream_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     // send request message
-    a3_message::request_config(can_tx.clone(), id).await;
+    a3_message::request_config(can_tx.clone(), id, wire_id).await;
 
     // control the stream
     let mut chunk_builder = ChunkBuilder::new();
@@ -346,13 +378,13 @@ async fn get_config_core(
         if size < 2 {
             return Err(AppError::runtime("zero-length data received"));
         }
-        match chunk_builder.data(&data.as_slice()[1..size], size - 1) {
+        match chunk_builder.data(&data.as_slice(), size) {
             Ok(is_done) => {
                 if is_done {
                     let properties = chunk_builder.build().unwrap();
                     return Ok(properties);
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), id).await?);
+                stream_resp_rx.replace(continue_stream(streams_tx.clone(), stream_id).await?);
                 a3_message::continue_config(can_tx.clone(), id).await;
             }
             Err(e) => {
@@ -365,34 +397,65 @@ async fn get_config_core(
 
 async fn start_stream(
     streams_tx: Sender<streams::Operation>,
-    remote_id: u8,
+    stream_id: u32,
 ) -> Result<oneshot::Receiver<CanMessage>> {
-    return start_or_continue_stream(streams_tx, remote_id, true).await;
+    return start_or_continue_stream(streams_tx, stream_id, true).await;
 }
 
 async fn continue_stream(
     streams_tx: Sender<streams::Operation>,
-    remote_id: u8,
+    stream_id: u32,
 ) -> Result<oneshot::Receiver<CanMessage>> {
-    return start_or_continue_stream(streams_tx, remote_id, false).await;
+    return start_or_continue_stream(streams_tx, stream_id, false).await;
+}
+
+async fn create_wire(
+    streams_tx: Sender<streams::Operation>,
+) -> Result<(u32, oneshot::Receiver<CanMessage>)> {
+    let (create_resp_tx, create_resp_rx) = oneshot::channel();
+    let (stream_resp_tx, stream_resp_rx) = oneshot::channel();
+    let operation = streams::Operation::CreateWire {
+        op_resp: create_resp_tx,
+        stream_resp: stream_resp_tx,
+    };
+
+    streams_tx.send(operation).await.unwrap();
+
+    return match create_resp_rx.await.unwrap() {
+        Ok(wire_id) => Ok((wire_id, stream_resp_rx)),
+        Err(e) => {
+            let error = match e.error_type {
+                streams::ErrorType::Busy => AppError {
+                    error_type: crate::error::ErrorType::A3StreamConflict,
+                    message: "busy".to_string(),
+                },
+                _ => AppError {
+                    error_type: crate::error::ErrorType::RuntimeError,
+                    message: format!("{:?}", e),
+                },
+            };
+
+            Err(error)
+        }
+    };
 }
 
 async fn start_or_continue_stream(
     streams_tx: Sender<streams::Operation>,
-    remote_id: u8,
+    stream_id: u32,
     is_start: bool,
 ) -> Result<oneshot::Receiver<CanMessage>> {
     let (start_resp_tx, start_resp_rx) = oneshot::channel();
     let (stream_resp_tx, stream_resp_rx) = oneshot::channel();
     let operation = if is_start {
         streams::Operation::Start {
-            remote_id,
+            stream_id,
             op_resp: start_resp_tx,
             stream_resp: stream_resp_tx,
         }
     } else {
         streams::Operation::Continue {
-            remote_id,
+            stream_id,
             op_resp: start_resp_tx,
             stream_resp: stream_resp_tx,
         }
@@ -414,11 +477,11 @@ async fn start_or_continue_stream(
     return Ok(stream_resp_rx);
 }
 
-async fn terminate_stream(streams_tx: Sender<streams::Operation>, id: u8) {
+async fn terminate_stream(streams_tx: Sender<streams::Operation>, stream_id: u32) {
     let (term_resp_tx, term_resp_rx) = oneshot::channel();
     streams_tx
         .send(streams::Operation::Terminate {
-            remote_id: id,
+            stream_id,
             op_resp: term_resp_tx,
         })
         .await

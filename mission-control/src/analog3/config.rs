@@ -2,9 +2,10 @@ use std::cmp::min;
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::analog3::{A3_PROP_MODULE_TYPE, schema::COMMON_MODULE_DEF};
-
-use super::schema::{MODULES_SCHEMA, ModuleDef, ValueType};
+use super::{
+    A3_PROP_MODULE_TYPE,
+    schema::{COMMON_MODULE_DEF, MODULES_SCHEMA, ModuleDef, ValueType},
+};
 
 #[derive(Debug, Clone)]
 pub struct TypeError {}
