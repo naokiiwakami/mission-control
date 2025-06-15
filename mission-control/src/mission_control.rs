@@ -87,7 +87,7 @@ impl MissionControl {
         } else if remote_id >= a3::A3_ID_ADMIN_WIRES_BASE {
             self.handle_stream_reply("admin-wire", message).unwrap();
         }
-        // else
+        // else ignore
     }
 
     fn handle_remote_sign_in(&self, in_message: CanMessage) -> Result<()> {
