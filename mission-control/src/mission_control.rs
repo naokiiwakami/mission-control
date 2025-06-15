@@ -74,8 +74,6 @@ impl MissionControl {
             let opcode = message.get_data(0);
             match opcode {
                 a3::A3_IM_REPLY_PING => self.handle_stream_reply("ping", message).unwrap(),
-                a3::A3_IM_REPLY_NAME => self.handle_stream_reply("get-name", message).unwrap(),
-                a3::A3_IM_REPLY_CONFIG => self.handle_stream_reply("get-config", message).unwrap(),
                 _ => {
                     log::warn!(
                         "Unknown opcode; id={:08x}, opcode={:02x}",

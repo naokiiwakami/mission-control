@@ -41,8 +41,6 @@ pub const A3_MC_CONTINUE_CONFIG: u8 = 0x07;
 
 /* Individual module opcodes */
 pub const A3_IM_REPLY_PING: u8 = 0x01;
-pub const A3_IM_REPLY_NAME: u8 = 0x02;
-pub const A3_IM_REPLY_CONFIG: u8 = 0x03;
 
 pub const A3_DATA_LENGTH: u8 = 8;
 
