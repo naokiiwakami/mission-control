@@ -38,6 +38,7 @@ pub const A3_MC_REQUEST_NAME: u8 = 0x04;
 pub const A3_MC_CONTINUE_NAME: u8 = 0x05;
 pub const A3_MC_REQUEST_CONFIG: u8 = 0x06;
 pub const A3_MC_CONTINUE_CONFIG: u8 = 0x07;
+pub const A3_MC_MODIFY_CONFIG: u8 = 0x08;
 
 /* Individual module opcodes */
 pub const A3_IM_REPLY_PING: u8 = 0x01;
