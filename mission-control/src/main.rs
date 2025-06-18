@@ -41,7 +41,20 @@ async fn main() {
     let mut mission_control = MissionControl::new(can_tx.clone(), modules_tx);
 
     // User sessions
-    let (mut command_rx, _command_handle) = user_session::start();
+    let (mut command_rx, _command_handle) = match user_session::start().await {
+        Ok(ret) => ret,
+        Err(e) => {
+            log::error!("The process failed to start listening: {:?}", e);
+            std::process::exit(1);
+        }
+    };
+
+    /*
+    let Ok((mut command_rx, _command_handle)) = user_session::start().await else {
+        log::error!("Error encountered while starting the listener port");
+        std::process::exit(1);
+    };
+    */
 
     a3_message::sign_in(can_tx.clone()).await;
 

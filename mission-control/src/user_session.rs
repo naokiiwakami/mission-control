@@ -18,18 +18,20 @@ use crate::{
     user_session::spec::Spec,
 };
 
-pub fn start() -> (Receiver<Command>, JoinHandle<()>) {
+pub async fn start() -> std::io::Result<(Receiver<Command>, JoinHandle<()>)> {
     let (command_tx, command_rx) = channel(8);
+    let listener = TcpListener::bind("127.0.0.1:9999").await?;
     let handle = tokio::spawn(async move {
-        let listener = TcpListener::bind("127.0.0.1:9999").await.unwrap(); // TODO: Handle error more gracefully
         log::info!("Listening on port 9999");
         loop {
             // The second item contains the IP and port of the new connection.
-            let (stream, _) = listener.accept().await.unwrap();
-            start_session(stream, command_tx.clone());
+            match listener.accept().await {
+                Ok((stream, _)) => start_session(stream, command_tx.clone()),
+                Err(e) => log::error!("User connection accept error: {:?}", e),
+            }
         }
     });
-    return (command_rx, handle);
+    return Ok((command_rx, handle));
 }
 
 fn start_session(stream: TcpStream, command_tx: Sender<Command>) {
