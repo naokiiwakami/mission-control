@@ -82,6 +82,59 @@ pub struct Property {
 }
 
 impl Property {
+    pub fn u8(id: u8, value: u8) -> Self {
+        Self {
+            id,
+            length: 1,
+            data: vec![value],
+        }
+    }
+
+    pub fn u16(id: u8, value: u16) -> Self {
+        Self {
+            id,
+            length: 2,
+            data: vec![(value >> 8) as u8, (value & 0xff) as u8],
+        }
+    }
+
+    pub fn u32(id: u8, value: u32) -> Self {
+        Self {
+            id,
+            length: 4,
+            data: vec![
+                ((value >> 24) & 0xff) as u8,
+                ((value >> 16) & 0xff) as u8,
+                ((value >> 8) & 0xff) as u8,
+                (value & 0xff) as u8,
+            ],
+        }
+    }
+
+    pub fn text(id: u8, value: &String) -> Self {
+        Self {
+            id,
+            length: value.len() as u8,
+            data: value.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn vector_u8(id: u8, value: &Vec<u8>) -> Self {
+        Self {
+            id,
+            length: value.len() as u8,
+            data: value.clone(),
+        }
+    }
+
+    pub fn boolean(id: u8, value: bool) -> Self {
+        Self {
+            id,
+            length: 1,
+            data: vec![if value { 1 } else { 0 }],
+        }
+    }
+
     pub fn get_value_with_type(&self, value_type: &ValueType) -> Value {
         let value = match value_type {
             ValueType::U8 => Value::U8(self.data[0]),
@@ -92,7 +145,20 @@ impl Property {
                     + ((self.data[2] as u32) << 8)
                     + self.data[3] as u32,
             ),
-            ValueType::Text => Value::Text(String::from_utf8(self.data.clone()).unwrap()),
+            ValueType::Text => {
+                let value = match String::from_utf8(self.data.clone()) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!("Utf parsing error: {:?}", e);
+                        let mut v = String::new();
+                        for byte in &self.data {
+                            v.push_str(format!("\\x{:02x}", byte).as_str());
+                        }
+                        v
+                    }
+                };
+                Value::Text(value)
+            }
             ValueType::Boolean => Value::Boolean(self.data[0] != 0),
             ValueType::VectorU8 => Value::VectorU8(self.data.clone()),
         };
@@ -209,8 +275,7 @@ fn error<T>(message: &str) -> Result<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct DataFieldBuilder {
-    // data_field: Option<DataField>,
+pub struct DataFieldParser {
     id: u8,
     length: u8,
     data: Option<Vec<u8>>,
@@ -219,7 +284,7 @@ pub struct DataFieldBuilder {
     data_pos: usize,
 }
 
-impl DataFieldBuilder {
+impl DataFieldParser {
     pub fn new() -> Self {
         Self {
             id: 0,
@@ -233,10 +298,10 @@ impl DataFieldBuilder {
 
     pub fn data(&mut self, data: &[u8], length: usize, offset: usize) -> Result<(bool, usize)> {
         if self.length_read && self.data_pos == self.length as usize {
-            return error("DataFieldBuilder: Data overflow");
+            return error("DataFieldParser: Data overflow");
         }
         let Some(acc_data) = &mut self.data.as_mut() else {
-            return error("DataFieldBuilder: Built already. The build cannot be used twice.");
+            return error("DataFieldParser: Committed already. The build cannot be used twice.");
         };
         let mut index = offset;
         if !self.id_read {
@@ -263,9 +328,9 @@ impl DataFieldBuilder {
         return Ok((is_ready, index + to_read));
     }
 
-    pub fn build(&mut self) -> Result<Property> {
+    pub fn commit(&mut self) -> Result<Property> {
         if self.data_pos < self.length as usize {
-            return error("DataFieldBuilder: The builder is not ready to build yet");
+            return error("DataFieldParser: The parser is not ready to build yet");
         }
         if let Some(data) = self.data.take() {
             return Ok(Property {
@@ -279,36 +344,36 @@ impl DataFieldBuilder {
 }
 
 #[derive(Debug, Clone)]
-pub struct ChunkBuilder {
+pub struct ChunkParser {
     chunk: Option<Vec<Property>>,
     target_num_fields: usize,
     num_fields_read: bool,
-    field_builder: DataFieldBuilder,
+    field_parser: DataFieldParser,
 }
 
-impl<'a> ChunkBuilder {
+impl ChunkParser {
     pub fn new() -> Self {
         return Self {
             chunk: Some(Vec::new()),
             target_num_fields: 0,
             num_fields_read: false,
-            field_builder: DataFieldBuilder::new(),
+            field_parser: DataFieldParser::new(),
         };
     }
 
     pub fn for_single_field() -> Self {
-        let mut builder = Self::new();
+        let mut parser = Self::new();
         let header: [u8; 1] = [1; 1];
-        builder.data(&header, 1).unwrap();
-        return builder;
+        parser.data(&header, 1).unwrap();
+        return parser;
     }
 
     pub fn data(&mut self, data: &[u8], data_length: usize) -> Result<bool> {
         let Some(chunk) = self.chunk.as_mut() else {
-            return error("ChunkBuilder: Built already. The builder cannot be used twice.");
+            return error("ChunkParser: Committed already. The parser cannot be used twice.");
         };
         if self.num_fields_read && chunk.len() == self.target_num_fields {
-            return error("ChunkBuilder: Data overflow.");
+            return error("ChunkParser: Data overflow.");
         }
 
         let mut index = 0;
@@ -318,39 +383,209 @@ impl<'a> ChunkBuilder {
             index += 1;
         }
         while index < data_length && chunk.len() < self.target_num_fields {
-            let (field_done, next_index) = self.field_builder.data(data, data_length, index)?;
+            let (field_done, next_index) = self.field_parser.data(data, data_length, index)?;
             index = next_index;
             if field_done {
-                chunk.push(self.field_builder.build().unwrap());
-                self.field_builder = DataFieldBuilder::new();
+                chunk.push(self.field_parser.commit().unwrap());
+                self.field_parser = DataFieldParser::new();
             }
         }
         return Ok(chunk.len() == self.target_num_fields);
     }
 
-    pub fn build(&mut self) -> Result<Vec<Property>> {
+    pub fn commit(&mut self) -> Result<Vec<Property>> {
         let Some(chunk) = self.chunk.as_ref() else {
-            return error("ChunkBuilder: build() method cannot be called twice.");
+            return error("ChunkParser: build() method cannot be called twice.");
         };
         if !self.num_fields_read || chunk.len() < self.target_num_fields {
-            return error("ChunkBuilder: The builder is not ready for generating the chunk.");
+            return error("ChunkParser: The parser is not ready for generating the chunk.");
         }
         return Ok(self.chunk.take().unwrap());
     }
 }
 
+// Property encoder ///////////////////////////////////////////////////////////////
+
+pub struct PropertyEncoder<'a> {
+    props: &'a Vec<Property>,
+    num_props_sent: bool,
+    prop_id_sent: bool,
+    value_length_sent: bool,
+    pos_value: usize,
+    pos_prop: usize,
+}
+
+impl<'a> PropertyEncoder<'a> {
+    pub fn new(props: &'a Vec<Property>) -> Self {
+        Self {
+            props,
+            num_props_sent: false,
+            prop_id_sent: false,
+            value_length_sent: false,
+            pos_value: 0,
+            pos_prop: 0,
+        }
+    }
+
+    /// Flushes next piece of property data into the specified byte array.
+    ///
+    /// # Arguments
+    ///
+    /// - `data` (`&mut [u8]`) - The data array where the data is flushed into.
+    ///
+    /// # Returns
+    ///
+    /// - `usize` - Number of bytes that were flushed.
+    pub fn flush(&mut self, out_data: &mut [u8]) -> usize {
+        let out_data_len = out_data.len();
+        if out_data_len < 1 || self.is_done() {
+            // nothing can be done
+            return 0;
+        }
+
+        let mut data_index = 0;
+        if !self.num_props_sent {
+            out_data[data_index] = self.props.len() as u8;
+            data_index += 1;
+            self.num_props_sent = true;
+        }
+
+        while data_index < out_data_len {
+            let prop = &self.props[self.pos_prop];
+
+            if !self.prop_id_sent {
+                out_data[data_index] = prop.id;
+                data_index += 1;
+                self.prop_id_sent = true;
+                if data_index >= out_data_len {
+                    return data_index;
+                }
+            }
+
+            if !self.value_length_sent {
+                out_data[data_index] = prop.data.len() as u8;
+                data_index += 1;
+                self.value_length_sent = true;
+                if data_index >= out_data_len {
+                    return data_index;
+                }
+            }
+
+            let bytes_to_send = min(out_data_len - data_index, prop.data.len() - self.pos_value);
+            let dest = &mut out_data[data_index..data_index + bytes_to_send];
+            let src = &prop.data[self.pos_value..self.pos_value + bytes_to_send];
+            dest.copy_from_slice(src);
+            data_index += bytes_to_send;
+            if self.update_positions(bytes_to_send) {
+                break;
+            }
+        }
+
+        return data_index;
+    }
+
+    /// Proceed the value and the prop positions by delta.
+    ///
+    /// # Arguments
+    ///
+    /// - `delta` (`usize`) - Steps to proceed.
+    ///
+    /// # Returns
+    ///
+    /// - `bool` - True if the position reaches the end.
+    fn update_positions(&mut self, delta: usize) -> bool {
+        let prop = &self.props[self.pos_prop];
+        self.pos_value += delta;
+        if self.pos_value >= prop.data.len() {
+            self.pos_value = 0;
+            self.prop_id_sent = false;
+            self.value_length_sent = false;
+            self.pos_prop += 1;
+        }
+        return self.is_done();
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.pos_prop == self.props.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::A3_PROP_NAME;
     use super::super::schema::load_schema;
     use super::*;
 
     #[test]
+    fn test_make_property_u8() {
+        let property = Property::u8(1, 234);
+        assert_eq!(property.id, 1);
+        let Ok(value) = property.get_value_with_type(&ValueType::U8).as_u8() else {
+            panic!();
+        };
+        assert_eq!(value, 234u8);
+    }
+
+    #[test]
+    fn test_make_property_u16() {
+        let property = Property::u16(2, 0xba11);
+        assert_eq!(property.id, 2);
+        let Ok(value) = property.get_value_with_type(&ValueType::U16).as_u16() else {
+            panic!();
+        };
+        assert_eq!(value, 0xba11u16);
+    }
+
+    #[test]
+    fn test_make_property_u32() {
+        let property = Property::u32(3, 0xba5eba11);
+        assert_eq!(property.id, 3);
+        let Ok(value) = property.get_value_with_type(&ValueType::U32).as_u32() else {
+            panic!();
+        };
+        assert_eq!(value, 0xba5eba11u32);
+    }
+
+    #[test]
+    fn test_make_property_text() {
+        let property = Property::text(4, &"hello world".to_string());
+        assert_eq!(property.id, 4);
+        let Ok(value) = property.get_value_with_type(&ValueType::Text).as_text() else {
+            panic!();
+        };
+        assert_eq!(value, "hello world");
+    }
+
+    #[test]
+    fn test_make_property_vector_u8() {
+        let property = Property::vector_u8(5, &vec![0xca, 0xfe]);
+        assert_eq!(property.id, 5);
+        let Ok(value) = property
+            .get_value_with_type(&ValueType::VectorU8)
+            .as_vec_u8()
+        else {
+            panic!();
+        };
+        assert_eq!(value, vec![0xca, 0xfe]);
+    }
+
+    #[test]
+    fn test_make_property_boolean() {
+        let property = Property::boolean(6, true);
+        assert_eq!(property.id, 6);
+        let Ok(value) = property.get_value_with_type(&ValueType::Boolean).as_bool() else {
+            panic!();
+        };
+        assert!(value);
+    }
+
+    #[test]
     fn test_parse_single_field_segment() {
         let data = b"\x02\x05hello";
-        let mut builder = DataFieldBuilder::new();
-        let result = builder.data(data, 7, 0).unwrap();
+        let mut parser = DataFieldParser::new();
+        let result = parser.data(data, 7, 0).unwrap();
         assert_eq!(result, (true, 7));
-        let data_field = builder.build().unwrap();
+        let data_field = parser.commit().unwrap();
         assert_eq!(data_field.id, 2);
         assert_eq!(data_field.data.as_slice(), b"hello");
         let Value::Text(value) = data_field.get_value_with_type(&ValueType::Text) else {
@@ -363,15 +598,15 @@ mod tests {
     fn test_parse_two_field_segments() {
         let data1 = b"\x02\x02hi\x03\x05h";
         let data2 = b"ello\0\0\0";
-        let mut builder1 = DataFieldBuilder::new();
-        let result = builder1.data(data1, 7, 0).unwrap();
+        let mut parser1 = DataFieldParser::new();
+        let result = parser1.data(data1, 7, 0).unwrap();
         assert_eq!(result, (true, 4));
-        let mut builder2 = DataFieldBuilder::new();
-        let result2 = builder2.data(data1, 7, 4).unwrap();
+        let mut parser2 = DataFieldParser::new();
+        let result2 = parser2.data(data1, 7, 4).unwrap();
         assert_eq!(result2, (false, 7));
-        let result3 = builder2.data(data2, 4, 0).unwrap();
+        let result3 = parser2.data(data2, 4, 0).unwrap();
         assert_eq!(result3, (true, 4));
-        let data_field1 = builder1.build().unwrap();
+        let data_field1 = parser1.commit().unwrap();
         assert_eq!(data_field1.data.as_slice(), b"hi");
 
         let Value::Text(value1) = data_field1.get_value_with_type(&ValueType::Text) else {
@@ -379,7 +614,7 @@ mod tests {
         };
         assert_eq!(value1, "hi".to_string());
 
-        let data_field2 = builder2.build().unwrap();
+        let data_field2 = parser2.commit().unwrap();
         assert_eq!(data_field2.data.as_slice(), b"hello");
         let Value::Text(value2) = data_field2.get_value_with_type(&ValueType::Text) else {
             panic!("unexpected value type");
@@ -391,10 +626,10 @@ mod tests {
     fn test_parse_chunk() {
         let data1 = b"\x02\x02\x02hi\x03\x05";
         let data2 = b"hello\0\0";
-        let mut builder = ChunkBuilder::new();
-        assert!(!builder.data(data1, 7).unwrap());
-        assert!(builder.data(data2, 5).unwrap());
-        let chunk = builder.build().unwrap();
+        let mut parser = ChunkParser::new();
+        assert!(!parser.data(data1, 7).unwrap());
+        assert!(parser.data(data2, 5).unwrap());
+        let chunk = parser.commit().unwrap();
         assert_eq!(chunk[0].data.as_slice(), b"hi");
         assert_eq!(chunk[1].data.as_slice(), b"hello");
 
@@ -410,12 +645,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_single_field_using_chunk_builder() {
+    fn test_parse_single_field_using_chunk_parser() {
         let data = b"\x02\x05hello";
-        let mut builder = ChunkBuilder::for_single_field();
-        let result = builder.data(data, 7).unwrap();
+        let mut parser = ChunkParser::for_single_field();
+        let result = parser.data(data, 7).unwrap();
         assert!(result);
-        let data_fields = builder.build().unwrap();
+        let data_fields = parser.commit().unwrap();
         assert_eq!(data_fields.len(), 1);
         let data_field = &data_fields[0];
         assert_eq!(data_field.id, 2);
@@ -437,13 +672,13 @@ mod tests {
 
         let schema = load_schema("test-schema");
 
-        let mut builder = ChunkBuilder::new();
+        let mut parser = ChunkParser::new();
         let mut index = 0;
         loop {
-            match builder.data(data[index], 7) {
+            match parser.data(data[index], 7) {
                 Ok(is_done) => {
                     if is_done {
-                        let properties = builder.build().unwrap();
+                        let properties = parser.commit().unwrap();
                         let config = Configuration::with_schema(properties, &schema);
                         assert_eq!(config.module_type, 0x2345);
                         assert_eq!(config.module_type_name.as_str(), "test-module");
@@ -467,5 +702,52 @@ mod tests {
             }
             index += 1;
         }
+    }
+
+    #[test]
+    fn test_encode_string() {
+        let prop = Property::text(A3_PROP_NAME, &"Analog3 mission control".to_string());
+        let props = vec![prop];
+        let mut encoder = PropertyEncoder::new(&props);
+
+        let mut data: [u8; 8] = [0; 8];
+
+        assert_eq!(encoder.flush(&mut data), 8);
+        assert!(!encoder.is_done());
+        assert_eq!(&data.as_slice(), b"\x01\x02\x17Analo");
+
+        assert_eq!(encoder.flush(&mut data), 8);
+        assert!(!encoder.is_done());
+        assert_eq!(&data.as_slice(), b"g3 missi");
+
+        assert_eq!(encoder.flush(&mut data), 8);
+        assert!(!encoder.is_done());
+        assert_eq!(&data.as_slice(), b"on contr");
+
+        assert_eq!(encoder.flush(&mut data), 2);
+        assert!(encoder.is_done());
+        assert_eq!(&data.as_slice()[0..2], b"ol");
+
+        assert_eq!(encoder.flush(&mut data), 0);
+    }
+
+    #[test]
+    fn test_two_props() {
+        let prop1 = Property::text(A3_PROP_NAME, &"Analog3".to_string());
+        let prop2 = Property::u32(3, 0xbd093ca7);
+        let props = vec![prop1, prop2];
+        let mut encoder = PropertyEncoder::new(&props);
+
+        let mut data: [u8; 8] = [0; 8];
+
+        assert_eq!(encoder.flush(&mut data), 8);
+        assert!(!encoder.is_done());
+        assert_eq!(&data.as_slice(), b"\x02\x02\x07Analo");
+
+        assert_eq!(encoder.flush(&mut data), 8);
+        assert!(encoder.is_done());
+        assert_eq!(&data.as_slice(), b"g3\x03\x04\xbd\x09\x3c\xa7");
+
+        assert_eq!(encoder.flush(&mut data), 0);
     }
 }

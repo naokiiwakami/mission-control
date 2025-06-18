@@ -97,6 +97,12 @@ impl CanMessage {
         }
     }
 
+    pub fn mut_data(&self) -> &mut [u8; 8usize] {
+        unsafe {
+            return &mut (*self.message).data;
+        }
+    }
+
     /// Attach the inside message so that the internal message
     /// is freed on destruction.
     pub fn attach(&mut self) {

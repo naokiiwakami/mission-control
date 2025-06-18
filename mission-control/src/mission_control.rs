@@ -12,7 +12,7 @@ use crate::{
     a3_modules::{self, A3Module},
     analog3::{
         self as a3,
-        config::{ChunkBuilder, Property},
+        config::{ChunkParser, Property, PropertyEncoder},
     },
     can_controller::CanMessage,
     command::Command,
@@ -41,10 +41,6 @@ impl MissionControl {
 
     pub fn handle_can_message(&mut self, message: CanMessage) {
         log::debug!("Message received: id={:08x}", message.id());
-        if message.data_length() == 0 {
-            log::debug!("no opcode");
-            return;
-        }
         if message.is_extended() {
             self.handle_extended_message(message);
         } else {
@@ -53,6 +49,10 @@ impl MissionControl {
     }
 
     fn handle_extended_message(&mut self, message: CanMessage) {
+        if message.data_length() == 0 {
+            log::debug!("no opcode");
+            return;
+        }
         let opcode = message.get_data(0);
         match opcode {
             a3::A3_ADMIN_SIGN_IN => self.handle_remote_sign_in(message).unwrap(),
@@ -71,6 +71,10 @@ impl MissionControl {
     fn handle_standard_message(&mut self, message: CanMessage) {
         let remote_id = message.id();
         if remote_id >= a3::A3_ID_INDIVIDUAL_MODULE_BASE {
+            if message.data_length() == 0 {
+                log::debug!("no opcode");
+                return;
+            }
             let opcode = message.get_data(0);
             match opcode {
                 a3::A3_IM_REPLY_PING => self.handle_stream_reply("ping", message).unwrap(),
@@ -180,6 +184,7 @@ impl MissionControl {
             } => self.ping(id, enable_visual, resp),
             Command::GetName { id, resp } => self.get_name(id, resp),
             Command::GetConfig { id, resp } => self.get_config(id, resp),
+            Command::SetConfig { id, props, resp } => self.set_config(id, props, resp),
             Command::RequestUidCancel { uid, resp } => self.request_uid_cancel(uid, resp),
             Command::PretendSignIn { uid, resp } => self.pretend_sign_in(uid, resp),
             Command::PretendNotifyId { uid, id, resp } => self.pretend_notify_id(uid, id, resp),
@@ -229,14 +234,14 @@ impl MissionControl {
         let can_tx = self.can_tx.clone();
         tokio::spawn(async move {
             match create_wire(streams_tx.clone()).await {
-                Ok((stream_id, stream_resp_rx)) => {
+                Ok((wire_addr, stream_resp_rx)) => {
                     let result =
-                        get_name_core(streams_tx.clone(), can_tx, id, stream_id, stream_resp_rx)
+                        get_name_core(streams_tx.clone(), can_tx, id, wire_addr, stream_resp_rx)
                             .await;
                     if let Err(e) = resp.send(result) {
                         log::error!("Error in sending back the get-name result: {:?}", e);
                     }
-                    terminate_stream(streams_tx, stream_id).await;
+                    terminate_stream(streams_tx, wire_addr).await;
                 }
                 Err(e) => resp.send(Err(e)).unwrap(),
             }
@@ -248,14 +253,39 @@ impl MissionControl {
         let can_tx = self.can_tx.clone();
         tokio::spawn(async move {
             match create_wire(streams_tx.clone()).await {
-                Ok((stream_id, stream_resp_rx)) => {
+                Ok((wire_addr, stream_resp_rx)) => {
                     let result =
-                        get_config_core(streams_tx.clone(), can_tx, id, stream_id, stream_resp_rx)
+                        get_config_core(streams_tx.clone(), can_tx, id, wire_addr, stream_resp_rx)
                             .await;
                     if let Err(e) = resp.send(result) {
                         log::error!("Error in sending back the get-name result: {:?}", e);
                     }
-                    terminate_stream(streams_tx, stream_id).await;
+                    terminate_stream(streams_tx, wire_addr).await;
+                }
+                Err(e) => resp.send(Err(e)).unwrap(),
+            }
+        });
+    }
+
+    fn set_config(&mut self, id: u8, props: Vec<Property>, resp: oneshot::Sender<Result<()>>) {
+        let streams_tx = self.streams_tx.clone();
+        let can_tx = self.can_tx.clone();
+        tokio::spawn(async move {
+            match create_wire(streams_tx.clone()).await {
+                Ok((wire_addr, stream_resp_rx)) => {
+                    let result = set_config_core(
+                        streams_tx.clone(),
+                        can_tx,
+                        id,
+                        props,
+                        wire_addr,
+                        stream_resp_rx,
+                    )
+                    .await;
+                    if let Err(e) = resp.send(result) {
+                        log::error!("Error in sending back the get-name result: {:?}", e);
+                    }
+                    terminate_stream(streams_tx, wire_addr).await;
                 }
                 Err(e) => resp.send(Err(e)).unwrap(),
             }
@@ -312,17 +342,17 @@ async fn get_name_core(
     streams_tx: Sender<streams::Operation>,
     can_tx: Sender<CanMessage>,
     id: u8,
-    stream_id: u32,
+    wire_addr: u32,
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<String> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
-    let wire_id = (stream_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
+    let wire_id = (wire_addr - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     // send request message
     a3_message::request_name(can_tx.clone(), id, wire_id).await;
 
     // control the stream
-    let mut chunk_builder = ChunkBuilder::for_single_field();
+    let mut chunk_parser = ChunkParser::for_single_field();
     loop {
         let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
         else {
@@ -334,14 +364,19 @@ async fn get_name_core(
         if size < 2 {
             return Err(AppError::runtime("zero-length data received"));
         }
-        match chunk_builder.data(&data.as_slice(), size) {
+        match chunk_parser.data(&data.as_slice(), size) {
             Ok(is_done) => {
                 if is_done {
-                    let properties = chunk_builder.build().unwrap();
-                    let name = properties[0].get_value_as_string().unwrap();
-                    return Ok(name);
+                    let properties = chunk_parser.commit().unwrap();
+                    return match properties[0].get_value_as_string() {
+                        Ok(name) => Ok(name),
+                        Err(e) => {
+                            log::warn!("Data reading error: {:?}", e);
+                            Err(AppError::runtime("Detected corrupted data"))
+                        }
+                    };
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), stream_id).await?);
+                stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_addr).await?);
                 a3_message::continue_name(can_tx.clone(), id).await;
             }
             Err(e) => {
@@ -356,17 +391,17 @@ async fn get_config_core(
     streams_tx: Sender<streams::Operation>,
     can_tx: Sender<CanMessage>,
     id: u8,
-    stream_id: u32,
+    wire_addr: u32,
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<Vec<Property>> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
-    let wire_id = (stream_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
+    let wire_id = (wire_addr - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     // send request message
     a3_message::request_config(can_tx.clone(), id, wire_id).await;
 
     // control the stream
-    let mut chunk_builder = ChunkBuilder::new();
+    let mut chunk_parser = ChunkParser::new();
     loop {
         let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
         else {
@@ -378,13 +413,13 @@ async fn get_config_core(
         if size < 2 {
             return Err(AppError::runtime("zero-length data received"));
         }
-        match chunk_builder.data(&data.as_slice(), size) {
+        match chunk_parser.data(&data.as_slice(), size) {
             Ok(is_done) => {
                 if is_done {
-                    let properties = chunk_builder.build().unwrap();
+                    let properties = chunk_parser.commit().unwrap();
                     return Ok(properties);
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), stream_id).await?);
+                stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_addr).await?);
                 a3_message::continue_config(can_tx.clone(), id).await;
             }
             Err(e) => {
@@ -393,6 +428,46 @@ async fn get_config_core(
             }
         }
     }
+}
+
+async fn set_config_core(
+    streams_tx: Sender<streams::Operation>,
+    can_tx: Sender<CanMessage>,
+    id: u8,
+    props: Vec<Property>,
+    wire_addr: u32,
+    init_stream_resp_rx: oneshot::Receiver<CanMessage>,
+) -> Result<()> {
+    let mut stream_resp_rx = Some(init_stream_resp_rx);
+    let wire_id = (wire_addr - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
+
+    // initiate modify config stream
+    a3_message::modify_config(can_tx.clone(), id, wire_id).await;
+
+    // control the stream
+    let mut encoder = PropertyEncoder::new(&props);
+    while !encoder.is_done() {
+        let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
+        else {
+            return Err(AppError::timeout());
+        };
+
+        let message = result.unwrap();
+        if !message.is_remote() {
+            log::warn!("arrived frame is not remote, sending data anyway");
+        }
+        let mut out_message = CanMessage::new();
+        out_message.set_id(wire_addr);
+        out_message.set_extended(false);
+        out_message.set_remote(false);
+        let num_flushed_bytes = encoder.flush(out_message.mut_data());
+        out_message.set_data_length(num_flushed_bytes as u8);
+        if !encoder.is_done() {
+            stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_addr).await?);
+        }
+        can_tx.send(out_message).await.unwrap();
+    }
+    return Ok(());
 }
 
 async fn start_stream(

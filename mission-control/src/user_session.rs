@@ -11,24 +11,27 @@ use tokio::{
 };
 
 use crate::{
-    analog3::config::{Configuration, Value},
+    analog3 as a3,
+    analog3::config::{Configuration, Property, Value},
     command::Command,
     error::{AppError, ErrorType},
     user_session::spec::Spec,
 };
 
-pub fn start() -> (Receiver<Command>, JoinHandle<()>) {
+pub async fn start() -> std::io::Result<(Receiver<Command>, JoinHandle<()>)> {
     let (command_tx, command_rx) = channel(8);
+    let listener = TcpListener::bind("127.0.0.1:9999").await?;
     let handle = tokio::spawn(async move {
-        let listener = TcpListener::bind("127.0.0.1:9999").await.unwrap(); // TODO: Handle error more gracefully
         log::info!("Listening on port 9999");
         loop {
             // The second item contains the IP and port of the new connection.
-            let (stream, _) = listener.accept().await.unwrap();
-            start_session(stream, command_tx.clone());
+            match listener.accept().await {
+                Ok((stream, _)) => start_session(stream, command_tx.clone()),
+                Err(e) => log::error!("User connection accept error: {:?}", e),
+            }
         }
     });
-    return (command_rx, handle);
+    return Ok((command_rx, handle));
 }
 
 fn start_session(stream: TcpStream, command_tx: Sender<Command>) {
@@ -81,6 +84,7 @@ impl Session {
                         "list" => self.list().await?,
                         "ping" => self.ping(command, &tokens).await?,
                         "get-name" => self.get_name(&command, &tokens).await?,
+                        "set-name" => self.set_name(&command, &tokens).await?,
                         "get-config" => self.get_config(&command, &tokens).await?,
                         "cancel-uid" => self.cancel_uid(&command, &tokens).await?,
                         "pretend-sign-in" => self.pretend_sign_in(&command, &tokens).await?,
@@ -165,6 +169,28 @@ impl Session {
         self.command_tx.send(command).await.unwrap();
 
         return self.wait_and_handle_response(resp_rx, |name| name).await;
+    }
+
+    async fn set_name(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        let specs = vec![Spec::u8("id", true), Spec::str("name", true)];
+        let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
+            return Ok(());
+        };
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let id = params[0].as_u8().unwrap();
+        let new_name = params[1].as_text().unwrap();
+        let property = Property::text(a3::A3_PROP_NAME, &new_name);
+        let command = Command::SetConfig {
+            id,
+            props: vec![property],
+            resp: resp_tx,
+        };
+        self.command_tx.send(command).await.unwrap();
+
+        return self
+            .wait_and_handle_response(resp_rx, |_| "ok".to_string())
+            .await;
     }
 
     async fn get_config(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {

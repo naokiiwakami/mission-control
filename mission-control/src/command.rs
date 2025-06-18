@@ -24,6 +24,11 @@ pub enum Command {
         id: u8,
         resp: oneshot::Sender<Result<Vec<Property>, AppError>>,
     },
+    SetConfig {
+        id: u8,
+        props: Vec<Property>,
+        resp: oneshot::Sender<Result<(), AppError>>,
+    },
     RequestUidCancel {
         uid: u32,
         resp: oneshot::Sender<Result<(), AppError>>,
