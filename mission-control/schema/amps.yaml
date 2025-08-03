@@ -1,0 +1,20 @@
+module_type: 2
+module_type_name: amps
+properties:
+  - id: 3
+    name: current_profile
+    value_type: u8
+  - id: 4
+    name: max_profiles
+    value_type: u8
+    read_only: true
+  - id: 5
+    name: num_voices
+    value_type: u8
+    read_only: true
+  - id: 6
+    name: cv_depth
+    value_type: u16
+  - id: 7
+    name: cv_offset
+    value_type: u16

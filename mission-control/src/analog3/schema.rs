@@ -69,6 +69,7 @@ pub struct PropertyDef {
     pub value_type: ValueType,
     #[serde(rename = "enum")]
     pub enum_names: Option<Vec<String>>,
+    pub read_only: Option<bool>,
 }
 
 /// Module description that is used tentatively during schema loading.
@@ -125,6 +126,7 @@ lazy_static! {
                 name: String::from("module_uid"),
                 value_type: ValueType::U32,
                 enum_names: None,
+                read_only: Some(true),
             },
         );
         def.properties.insert(
@@ -134,6 +136,7 @@ lazy_static! {
                 name: String::from("module_type"),
                 value_type: ValueType::U16,
                 enum_names: None,
+                read_only: Some(true),
             },
         );
         def.properties.insert(
@@ -143,6 +146,7 @@ lazy_static! {
                 name: String::from("name"),
                 value_type: ValueType::Text,
                 enum_names: None,
+                read_only: None,
             },
         );
 
