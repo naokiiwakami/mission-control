@@ -2,11 +2,11 @@
 
 PROJECT_ROOT="$(cd "$(dirname "$0")"; pwd)"
 rm -r ${PROJECT_ROOT}/can-controller/build
-# git submodule update --recursive
+git submodule update --recursive
 mkdir -p ${PROJECT_ROOT}/can-controller/build
 
 cmake \
-    -DCMAKE_BUILD_TYPE=Relase \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DPLATFORM=raspberry-pi \
     -DDEVICE=mcp2518fd \
     -DSUPPORT_CALLBACK_INJECTION=true \

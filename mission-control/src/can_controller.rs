@@ -164,6 +164,31 @@ pub fn start() -> (Sender<CanMessage>, Receiver<CanMessage>, JoinHandle<()>) {
             log::error!("Error encountered while initializing CAN controller");
             std::process::exit(1);
         }
+        let handle = can_filter_start_config();
+        if handle == std::ptr::null_mut() {
+            log::error!("Failed to start CAN filter configuration");
+            std::process::exit(1);
+        }
+        let result_clear = can_filter_clear(handle);
+        if result_clear != 0 {
+            log::error!("Failed to clear CAN filter; error={}", result_clear);
+        }
+        let result_std = can_filter_add_std_id_gte(handle, 0x680);
+        if result_std != 0 {
+            log::error!("Failed to set filter for STD IDs; error={}", result_std);
+        }
+        let result_ext = can_filter_add_ext_id_all(handle);
+        if result_ext != 0 {
+            log::error!("Failed to set filter for all EXT IDs; error={}", result_ext);
+        }
+        let result_apply = can_filter_apply_config(handle);
+        if result_apply != 0 {
+            log::error!("Failed to apply filter settings; error={}", result_apply);
+        }
+        if can_start() != 0 {
+            log::error!("Error encountered while starting CAN controller");
+            std::process::exit(1);
+        }
     }
 
     // set up message tx
