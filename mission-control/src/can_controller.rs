@@ -144,6 +144,17 @@ fn run_tx(mut tx_receiver: Receiver<CanMessage>) -> JoinHandle<()> {
     return tokio::spawn(async move {
         loop {
             if let Some(message) = tx_receiver.recv().await {
+                if log::log_enabled!(log::Level::Debug) {
+                    let mut data_elements = Vec::<String>::new();
+                    for i in 0..message.data_length() as usize {
+                        data_elements.push(format!("{:02x}", message.data()[i]));
+                    }
+                    log::debug!(
+                        "Message sending: id={:08x} data={}",
+                        message.id(),
+                        data_elements.join(" ")
+                    );
+                }
                 unsafe {
                     can_send_message(message.message);
                 }

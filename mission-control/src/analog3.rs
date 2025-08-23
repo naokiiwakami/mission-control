@@ -42,6 +42,7 @@ pub const A3_MC_MODIFY_CONFIG: u8 = 0x08;
 
 /* Individual module opcodes */
 pub const A3_IM_REPLY_PING: u8 = 0x01;
+pub const A3_IM_ID_ASSIGN_ACK: u8 = 0x02;
 
 pub const A3_DATA_LENGTH: u8 = 8;
 

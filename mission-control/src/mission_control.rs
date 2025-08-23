@@ -78,6 +78,7 @@ impl MissionControl {
             let opcode = message.get_data(0);
             match opcode {
                 a3::A3_IM_REPLY_PING => self.handle_stream_reply("ping", message).unwrap(),
+                a3::A3_IM_ID_ASSIGN_ACK => self.handle_stream_reply("id-assign", message).unwrap(),
                 _ => {
                     log::warn!(
                         "Unknown opcode; id={:08x}, opcode={:02x}",
@@ -94,6 +95,7 @@ impl MissionControl {
 
     fn handle_remote_sign_in(&self, in_message: CanMessage) -> Result<()> {
         let modules_tx = self.modules_tx.clone();
+        let streams_tx = self.streams_tx.clone();
         let can_tx = self.can_tx.clone();
         tokio::spawn(async move {
             let remote_uid = in_message.id();
@@ -104,12 +106,37 @@ impl MissionControl {
             };
             modules_tx.send(modules_op).await.unwrap();
             let remote_id = resp_rx.await.unwrap().unwrap();
-            a3_message::assign_module_id(can_tx, remote_uid, remote_id).await;
+            let stream_id = remote_id as u32 + a3::A3_ID_INDIVIDUAL_MODULE_BASE;
             log::info!(
-                "Issued module id {:02x} for uid {:08x}",
+                "Assigning module id {:02x} for uid {:08x}",
                 remote_id,
                 remote_uid
             );
+            match assign_remote_id(
+                streams_tx.clone(),
+                can_tx.clone(),
+                stream_id,
+                remote_id,
+                remote_uid,
+            )
+            .await
+            {
+                Ok(_) => {
+                    log::info!(
+                        "ID confirmed module id {:02x} for uid {:08x}",
+                        remote_id,
+                        remote_uid
+                    );
+                }
+                Err(error) => {
+                    log::warn!(
+                        "An error encountered in ID assignment; id={:02x}, uid={:08x}, error={:?}",
+                        remote_id,
+                        remote_uid,
+                        error
+                    );
+                }
+            }
         });
         return Ok(());
     }
@@ -468,6 +495,39 @@ async fn set_config_core(
         can_tx.send(out_message).await.unwrap();
     }
     return Ok(());
+}
+
+async fn assign_remote_id(
+    streams_tx: Sender<streams::Operation>,
+    can_tx: Sender<CanMessage>,
+    stream_id: u32,
+    remote_id: u8,
+    remote_uid: u32,
+) -> Result<()> {
+    let mut timeout_interval = Duration::from_millis(50);
+    let mut ret: Result<()> = Ok(());
+    for _ in 0..10 {
+        a3_message::assign_module_id(can_tx.clone(), remote_uid, remote_id).await;
+        let stream_resp_rx = start_stream(streams_tx.clone(), stream_id).await?;
+        let result = timeout(timeout_interval, stream_resp_rx).await;
+        terminate_stream(streams_tx.clone(), stream_id).await;
+        match result {
+            Ok(_) => {
+                ret = Ok(());
+                break;
+            }
+            Err(_) => {
+                log::warn!(
+                    "No response from peer for ID assignment, retrying; id={:02x}, uid={:08x}",
+                    remote_id,
+                    remote_uid
+                );
+                timeout_interval *= 2;
+                ret = Err(AppError::timeout());
+            }
+        };
+    }
+    return ret;
 }
 
 async fn start_stream(
