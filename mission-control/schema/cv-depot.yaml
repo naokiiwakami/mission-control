@@ -28,10 +28,13 @@ properties:
       - Analog3
       - Legacy
   - id: 8
+    name: bend_depth
+    value_type: u8
+  - id: 9
     name: retrigger
     value_type: boolean
     default: off
-  - id: 9
+  - id: 10
     name: portament_mode
     value_type: u8
     enum:
@@ -39,7 +42,7 @@ properties:
       - ALWAYS
       - ON_LEGATO
     default: OFF
-  - id: 10
+  - id: 11
     name: portament_direction
     value_type: u8
     enum:
@@ -47,7 +50,7 @@ properties:
       - UPWARDS
       - DOWNWARDS
     default: BOTH
-  - id: 11
+  - id: 12
     name: portament_time
     value_type: u8
     default: 0
