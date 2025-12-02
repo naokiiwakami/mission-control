@@ -56,7 +56,7 @@ impl Session {
 
     pub async fn run(&mut self) -> std::io::Result<()> {
         self.stream
-            .write_all(b"welcome to analog3 mission control\r\n")
+            .write_all(b"\r\n====================================\r\n welcome to analog3 mission control\r\n====================================\r\n\r\n")
             .await?;
 
         loop {
@@ -84,7 +84,7 @@ impl Session {
                         "list" => self.list().await?,
                         "ping" => self.ping(command, &tokens).await?,
                         "get-name" => self.get_name(&command, &tokens).await?,
-                        "set-name" => self.set_name(&command, &tokens).await?,
+                        "rename" => self.rename(&command, &tokens).await?,
                         "get-config" => self.get_config(&command, &tokens).await?,
                         "cancel-uid" => self.cancel_uid(&command, &tokens).await?,
                         "pretend-sign-in" => self.pretend_sign_in(&command, &tokens).await?,
@@ -171,7 +171,7 @@ impl Session {
         return self.wait_and_handle_response(resp_rx, |name| name).await;
     }
 
-    async fn set_name(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+    async fn rename(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
         let specs = vec![Spec::u8("id", true), Spec::str("name", true)];
         let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
             return Ok(());
