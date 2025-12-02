@@ -388,7 +388,7 @@ async fn get_name_core(
         let message = result.unwrap();
         let data = &message.data();
         let size = message.data_length() as usize;
-        if size < 2 {
+        if size < 1 {
             return Err(AppError::runtime("zero-length data received"));
         }
         match chunk_parser.data(&data.as_slice(), size) {
@@ -437,7 +437,7 @@ async fn get_config_core(
         let message = result.unwrap();
         let data = &message.data();
         let size = message.data_length() as usize;
-        if size < 2 {
+        if size < 1 {
             return Err(AppError::runtime("zero-length data received"));
         }
         match chunk_parser.data(&data.as_slice(), size) {

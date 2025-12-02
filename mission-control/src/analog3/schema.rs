@@ -22,6 +22,7 @@ pub enum ValueType {
     Text,
     Boolean,
     VectorU8,
+    VectorU16,
 }
 
 impl ValueType {
@@ -34,6 +35,13 @@ impl ValueType {
             ValueType::Boolean => value.as_bool().unwrap().to_string(),
             ValueType::VectorU8 => value
                 .as_vec_u8()
+                .unwrap()
+                .iter()
+                .map(|val| val.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            ValueType::VectorU16 => value
+                .as_vec_u16()
                 .unwrap()
                 .iter()
                 .map(|val| val.to_string())
@@ -54,6 +62,13 @@ impl ValueType {
                 .unwrap()
                 .iter()
                 .map(|val| format!("{:02x}", val))
+                .collect::<Vec<_>>()
+                .join(", "),
+            ValueType::VectorU16 => value
+                .as_vec_u16()
+                .unwrap()
+                .iter()
+                .map(|val| format!("{:04x}", val))
                 .collect::<Vec<_>>()
                 .join(", "),
         };
@@ -204,7 +219,7 @@ mod tests {
         };
         assert_eq!(entry.module_type, 1);
         assert_eq!(entry.module_type_name, "cv-depot".to_string());
-        assert_eq!(entry.properties.len(), 11);
+        assert_eq!(entry.properties.len(), 13);
 
         let Some(uid) = entry.properties.get(&0) else {
             panic!("UID entry not found");

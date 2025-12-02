@@ -28,6 +28,7 @@ pub enum Value {
     Text(String),
     Boolean(bool),
     VectorU8(Vec<u8>),
+    VectorU16(Vec<u16>),
 }
 
 impl Value {
@@ -68,6 +69,13 @@ impl Value {
 
     pub fn as_vec_u8(&self) -> std::result::Result<Vec<u8>, TypeError> {
         let Value::VectorU8(value) = self else {
+            return Err(TypeError {});
+        };
+        return Ok(value.clone());
+    }
+
+    pub fn as_vec_u16(&self) -> std::result::Result<Vec<u16>, TypeError> {
+        let Value::VectorU16(value) = self else {
             return Err(TypeError {});
         };
         return Ok(value.clone());
@@ -127,6 +135,15 @@ impl Property {
         }
     }
 
+    pub fn vector_u16(id: u8, value: &Vec<u16>) -> Self {
+        let data = value.into_iter().flat_map(|v| v.to_be_bytes()).collect();
+        Self {
+            id,
+            length: value.len() as u8,
+            data,
+        }
+    }
+
     pub fn boolean(id: u8, value: bool) -> Self {
         Self {
             id,
@@ -161,6 +178,14 @@ impl Property {
             }
             ValueType::Boolean => Value::Boolean(self.data[0] != 0),
             ValueType::VectorU8 => Value::VectorU8(self.data.clone()),
+            ValueType::VectorU16 => {
+                let length = self.data.len() & !1;
+                let value = self.data[..length]
+                    .chunks(2)
+                    .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                    .collect();
+                Value::VectorU16(value)
+            }
         };
         value
     }
@@ -223,7 +248,7 @@ impl<'a> Configuration<'a> {
         let property = &self.properties[index];
         match self.module_def.properties.get(&property.id) {
             Some(prop_def) => prop_def.name.clone(),
-            None => "unknown property".to_string(),
+            None => format!("unknown id={}", property.id),
         }
     }
 
@@ -235,18 +260,35 @@ impl<'a> Configuration<'a> {
                 let value = property.get_value_with_type(value_type);
 
                 match &prop_def.enum_names {
-                    Some(enum_names) => {
-                        let enum_index = value.as_u8().unwrap() as usize;
-                        if enum_index < enum_names.len() {
-                            enum_names[enum_index].clone()
-                        } else {
-                            "VALUE_OUT_OF_ENUM_RANGE".to_string()
+                    Some(enum_names) => match value_type {
+                        ValueType::U8 => {
+                            let enum_index = value.as_u8().unwrap() as usize;
+                            if enum_index < enum_names.len() {
+                                enum_names[enum_index].clone()
+                            } else {
+                                "VALUE_OUT_OF_ENUM_RANGE".to_string()
+                            }
                         }
-                    }
+                        ValueType::VectorU8 => value
+                            .as_vec_u8()
+                            .unwrap()
+                            .iter()
+                            .map(|value| {
+                                let index = value.clone() as usize;
+                                if index < enum_names.len() {
+                                    enum_names[index].clone()
+                                } else {
+                                    "VALUE_OUT_OF_ENUM_RANGE".to_string()
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        _ => "INVALID_ENUM_TYPE".to_string(),
+                    },
                     None => value_type.to_hex(&value),
                 }
             }
-            None => "unknown property".to_string(),
+            None => hex::encode(&property.data),
         }
     }
 }
@@ -567,6 +609,19 @@ mod tests {
             panic!();
         };
         assert_eq!(value, vec![0xca, 0xfe]);
+    }
+
+    #[test]
+    fn test_make_property_vector_u16() {
+        let property = Property::vector_u16(7, &vec![0xba5e, 0xba11]);
+        assert_eq!(property.id, 7);
+        let Ok(value) = property
+            .get_value_with_type(&ValueType::VectorU16)
+            .as_vec_u16()
+        else {
+            panic!();
+        };
+        assert_eq!(value, vec![0xba5e, 0xba11]);
     }
 
     #[test]
