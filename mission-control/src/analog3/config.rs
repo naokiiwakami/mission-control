@@ -2,6 +2,8 @@ use std::cmp::min;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::error::{AppError, ErrorType};
+
 use super::{
     A3_PROP_MODULE_TYPE,
     schema::{COMMON_MODULE_DEF, MODULES_SCHEMA, ModuleDef, ValueType},
@@ -139,7 +141,7 @@ impl Property {
         let data = value.into_iter().flat_map(|v| v.to_be_bytes()).collect();
         Self {
             id,
-            length: value.len() as u8,
+            length: (value.len() * 2) as u8,
             data,
         }
     }
@@ -150,6 +152,73 @@ impl Property {
             length: 1,
             data: vec![if value { 1 } else { 0 }],
         }
+    }
+
+    pub fn from_string(
+        id: u8,
+        src: &String,
+        value_type: &ValueType,
+    ) -> std::result::Result<Self, AppError> {
+        match value_type {
+            ValueType::U8 => {
+                let Ok(value) = src.parse() else {
+                    return Self::make_error();
+                };
+                Ok(Self::u8(id, value))
+            }
+            ValueType::U16 => {
+                let Ok(value) = src.parse() else {
+                    return Self::make_error();
+                };
+                Ok(Self::u16(id, value))
+            }
+            ValueType::U32 => {
+                let Ok(value) = src.parse() else {
+                    return Self::make_error();
+                };
+                Ok(Self::u32(id, value))
+            }
+            ValueType::Text => Ok(Self::text(id, src)),
+            ValueType::Boolean => {
+                let Ok(value) = src.parse() else {
+                    return Self::make_error();
+                };
+                Ok(Self::boolean(id, value))
+            }
+            ValueType::VectorU8 => {
+                let src_array = Self::split(src);
+                let mut out: Vec<u8> = Vec::new();
+                for element in src_array {
+                    let Ok(value) = element.parse() else {
+                        return Self::make_error();
+                    };
+                    out.push(value);
+                }
+                Ok(Self::vector_u8(id, &out))
+            }
+            ValueType::VectorU16 => {
+                let src_array = Self::split(src);
+                let mut out: Vec<u16> = Vec::new();
+                for element in src_array {
+                    let Ok(value) = element.parse() else {
+                        return Self::make_error();
+                    };
+                    out.push(value);
+                }
+                Ok(Self::vector_u16(id, &out))
+            }
+        }
+    }
+
+    fn make_error() -> std::result::Result<Self, AppError> {
+        Err(AppError::new(
+            ErrorType::A3InvalidValue,
+            "Invalid value string".to_string(),
+        ))
+    }
+
+    fn split(src: &String) -> Vec<String> {
+        src.split(",").map(|s| s.trim().to_string()).collect()
     }
 
     pub fn get_value_with_type(&self, value_type: &ValueType) -> Value {
@@ -227,7 +296,7 @@ impl<'a> Configuration<'a> {
             }
         }
         let module_def = match schema.get(&module_type) {
-            Some(prop_def) => prop_def,
+            Some(def) => def,
             None => &COMMON_MODULE_DEF,
         };
 
@@ -247,8 +316,8 @@ impl<'a> Configuration<'a> {
     pub fn prop_name(&self, index: usize) -> String {
         let property = &self.properties[index];
         match self.module_def.properties.get(&property.id) {
-            Some(prop_def) => prop_def.name.clone(),
-            None => format!("unknown id={}", property.id),
+            Some(prop_def) => format!("({:3}) {}", property.id, prop_def.name),
+            None => format!("({:3}) unknown", property.id),
         }
     }
 

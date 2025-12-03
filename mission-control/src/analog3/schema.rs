@@ -124,6 +124,17 @@ impl ModuleDef {
 
         def
     }
+
+    pub fn get_property_def_by_name(&self, name: &String) -> Option<&PropertyDef> {
+        match self.properties.iter().find(|entry| entry.1.name == *name) {
+            Some(entry) => Some(entry.1),
+            None => None,
+        }
+    }
+
+    pub fn get_property_by_id(&self, id: u8) -> Option<&PropertyDef> {
+        self.properties.get(&id)
+    }
 }
 
 lazy_static! {

@@ -11,12 +11,13 @@ use crate::{
     a3_message,
     a3_modules::{self, A3Module},
     analog3::{
-        self as a3,
+        self as a3, A3_PROP_MODULE_TYPE, A3_PROP_NAME,
         config::{ChunkParser, Property, PropertyEncoder},
+        schema::{MODULES_SCHEMA, ModuleDef, ValueType},
     },
     can_controller::CanMessage,
     command::Command,
-    error::AppError,
+    error::{AppError, ErrorType},
 };
 
 type Result<T> = std::result::Result<T, AppError>;
@@ -204,6 +205,8 @@ impl MissionControl {
         match command {
             Command::Hi { resp } => self.hi(resp),
             Command::List { resp } => self.list(resp),
+            Command::GetModule { id, resp } => self.get_module(id, resp),
+            Command::GetSchema { id, resp } => self.get_schema(id, resp),
             Command::Ping {
                 id,
                 enable_visual,
@@ -243,6 +246,47 @@ impl MissionControl {
         });
     }
 
+    fn get_module(&mut self, id: u8, resp: oneshot::Sender<Result<A3Module>>) {
+        let modules_tx = self.modules_tx.clone();
+        tokio::spawn(async move {
+            let (tx, rx) = oneshot::channel();
+            modules_tx
+                .send(a3_modules::Operation::GetById { id, resp: tx })
+                .await
+                .unwrap();
+            resp.send(rx.await.unwrap()).unwrap();
+        });
+    }
+
+    fn get_schema(&mut self, id: u8, resp: oneshot::Sender<Result<ModuleDef>>) {
+        let modules_tx = self.modules_tx.clone();
+        tokio::spawn(async move {
+            let (tx, rx) = oneshot::channel();
+            modules_tx
+                .send(a3_modules::Operation::GetById { id, resp: tx })
+                .await
+                .unwrap();
+            let result: Result<ModuleDef> = match rx.await.unwrap() {
+                Ok(module) => match module.module_type_id {
+                    Some(tid) => match MODULES_SCHEMA.get(&tid) {
+                        Some(value) => Ok(value.clone()),
+                        None => Err(AppError::new(
+                            ErrorType::A3SchemaError,
+                            "Schema unknown".to_string(),
+                        )),
+                    },
+                    None => Err(AppError::new(
+                        ErrorType::A3SchemaError,
+                        "Module type could not be resolved. Consider running get-config"
+                            .to_string(),
+                    )),
+                },
+                Err(e) => Err(e),
+            };
+            resp.send(result).unwrap();
+        });
+    }
+
     fn ping(&mut self, id: u8, enable_visual: bool, resp: oneshot::Sender<Result<()>>) {
         let streams_tx = self.streams_tx.clone();
         let can_tx = self.can_tx.clone();
@@ -276,14 +320,21 @@ impl MissionControl {
     }
 
     fn get_config(&mut self, id: u8, resp: oneshot::Sender<Result<Vec<Property>>>) {
+        let modules_tx = self.modules_tx.clone();
         let streams_tx = self.streams_tx.clone();
         let can_tx = self.can_tx.clone();
         tokio::spawn(async move {
             match create_wire(streams_tx.clone()).await {
                 Ok((wire_addr, stream_resp_rx)) => {
-                    let result =
-                        get_config_core(streams_tx.clone(), can_tx, id, wire_addr, stream_resp_rx)
-                            .await;
+                    let result = get_config_core(
+                        streams_tx.clone(),
+                        can_tx,
+                        modules_tx,
+                        id,
+                        wire_addr,
+                        stream_resp_rx,
+                    )
+                    .await;
                     if let Err(e) = resp.send(result) {
                         log::error!("Error in sending back the get-name result: {:?}", e);
                     }
@@ -297,12 +348,14 @@ impl MissionControl {
     fn set_config(&mut self, id: u8, props: Vec<Property>, resp: oneshot::Sender<Result<()>>) {
         let streams_tx = self.streams_tx.clone();
         let can_tx = self.can_tx.clone();
+        let modules_tx = self.modules_tx.clone();
         tokio::spawn(async move {
             match create_wire(streams_tx.clone()).await {
                 Ok((wire_addr, stream_resp_rx)) => {
                     let result = set_config_core(
                         streams_tx.clone(),
                         can_tx,
+                        modules_tx,
                         id,
                         props,
                         wire_addr,
@@ -417,6 +470,7 @@ async fn get_name_core(
 async fn get_config_core(
     streams_tx: Sender<streams::Operation>,
     can_tx: Sender<CanMessage>,
+    modules_tx: Sender<a3_modules::Operation>,
     id: u8,
     wire_addr: u32,
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
@@ -444,6 +498,35 @@ async fn get_config_core(
             Ok(is_done) => {
                 if is_done {
                     let properties = chunk_parser.commit().unwrap();
+                    // TODO: make following a subroutine.
+                    let mut name: Option<String> = None;
+                    let mut module_type: Option<String> = None;
+                    let mut module_type_id: Option<u16> = None;
+                    for property in &properties {
+                        match property.id {
+                            A3_PROP_NAME => {
+                                name.replace(property.get_value_as_string().unwrap());
+                            }
+                            A3_PROP_MODULE_TYPE => {
+                                let type_id: u16 = property
+                                    .get_value_with_type(&ValueType::U16)
+                                    .as_u16()
+                                    .unwrap();
+                                module_type_id.replace(type_id);
+                                if let Some(module_def) = MODULES_SCHEMA.get(&type_id) {
+                                    module_type.replace(module_def.module_type_name.clone());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let modules_op = a3_modules::Operation::SetProperties {
+                        id,
+                        name,
+                        module_type,
+                        module_type_id,
+                    };
+                    modules_tx.send(modules_op).await.unwrap();
                     return Ok(properties);
                 }
                 stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_addr).await?);
@@ -460,6 +543,7 @@ async fn get_config_core(
 async fn set_config_core(
     streams_tx: Sender<streams::Operation>,
     can_tx: Sender<CanMessage>,
+    modules_tx: Sender<a3_modules::Operation>,
     id: u8,
     props: Vec<Property>,
     wire_addr: u32,
@@ -493,6 +577,24 @@ async fn set_config_core(
             stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_addr).await?);
         }
         can_tx.send(out_message).await.unwrap();
+    }
+    let mut name: Option<String> = None;
+    for prop in &props {
+        if prop.id == A3_PROP_NAME {
+            name.replace(prop.get_value_as_string().unwrap());
+            break;
+        }
+    }
+    if name.is_some() {
+        let module_type: Option<String> = None;
+        let module_type_id: Option<u16> = None;
+        let modules_op = a3_modules::Operation::SetProperties {
+            id,
+            name,
+            module_type,
+            module_type_id,
+        };
+        modules_tx.send(modules_op).await.unwrap();
     }
     return Ok(());
 }

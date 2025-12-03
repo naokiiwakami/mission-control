@@ -49,13 +49,6 @@ async fn main() {
         }
     };
 
-    /*
-    let Ok((mut command_rx, _command_handle)) = user_session::start().await else {
-        log::error!("Error encountered while starting the listener port");
-        std::process::exit(1);
-    };
-    */
-
     a3_message::sign_in(can_tx.clone()).await;
 
     loop {

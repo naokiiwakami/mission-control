@@ -2,7 +2,10 @@ use tokio::sync::oneshot;
 
 use crate::{
     a3_modules::A3Module,
-    analog3::config::{Property, Value},
+    analog3::{
+        config::{Property, Value},
+        schema::ModuleDef,
+    },
     error::AppError,
 };
 
@@ -23,6 +26,14 @@ pub enum Command {
     GetConfig {
         id: u8,
         resp: oneshot::Sender<Result<Vec<Property>, AppError>>,
+    },
+    GetModule {
+        id: u8,
+        resp: oneshot::Sender<Result<A3Module, AppError>>,
+    },
+    GetSchema {
+        id: u8,
+        resp: oneshot::Sender<Result<ModuleDef, AppError>>,
     },
     SetConfig {
         id: u8,

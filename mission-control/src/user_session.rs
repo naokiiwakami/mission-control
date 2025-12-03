@@ -70,7 +70,7 @@ impl Session {
                 _ => {
                     let trimmed = line.trim().to_string();
                     log::debug!("Received: {}", trimmed);
-                    let tokens: Vec<String> = trimmed.split(" ").map(str::to_string).collect();
+                    let tokens: Vec<String> = Self::tokenize(&trimmed);
                     if tokens.is_empty() {
                         // do nothing
                         continue;
@@ -86,6 +86,7 @@ impl Session {
                         "get-name" => self.get_name(&command, &tokens).await?,
                         "rename" => self.rename(&command, &tokens).await?,
                         "get-config" => self.get_config(&command, &tokens).await?,
+                        "set-property" => self.set_property(&command, &tokens).await?,
                         "cancel-uid" => self.cancel_uid(&command, &tokens).await?,
                         "pretend-sign-in" => self.pretend_sign_in(&command, &tokens).await?,
                         "pretend-notify-id" => self.pretend_notify_id(&command, &tokens).await?,
@@ -122,7 +123,17 @@ impl Session {
             .wait_and_handle_response(resp_rx, |modules| {
                 let reply = modules
                     .iter()
-                    .map(|m| format!("uid {:08x} id {:02x}", m.uid, m.id))
+                    .map(|m| {
+                        let module_type = match &m.module_type {
+                            Some(value) => format!(" type={}", value),
+                            None => "".to_string(),
+                        };
+                        let name = match &m.name {
+                            Some(value) => format!(" name={}", value),
+                            None => "".to_string(),
+                        };
+                        format!("uid={:08x} id={:02x}{}{}", m.uid, m.id, module_type, name)
+                    })
                     .collect::<Vec<_>>()
                     .join("\r\n");
                 return reply;
@@ -235,6 +246,74 @@ impl Session {
             .await;
     }
 
+    async fn set_property(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
+        let specs = vec![
+            Spec::u8("id", true),
+            Spec::str("prop", true),
+            Spec::str("name", true),
+        ];
+        let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
+            return Ok(());
+        };
+
+        let id = params[0].as_u8().unwrap();
+        let property_name = params[1].as_text().unwrap();
+        let property_value = params[2].as_text().unwrap();
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        if let Err(e) = self
+            .set_property_core(id, &property_name, &property_value, resp_tx)
+            .await
+        {
+            log::warn!("Operation failed: {:?}", e);
+            self.stream
+                .write_all(format!("Error: {:?}: {}\r\n", e.error_type, e.message).as_bytes())
+                .await?;
+            return Ok(());
+        }
+
+        return self
+            .wait_and_handle_response(resp_rx, |_| "ok".to_string())
+            .await;
+    }
+
+    async fn set_property_core(
+        &mut self,
+        id: u8,
+        property_name: &String,
+        property_value: &String,
+        resp_tx: oneshot::Sender<Result<(), AppError>>,
+    ) -> Result<(), AppError> {
+        // Retrieve the schema of the module
+        let (schema_resp_tx, schema_resp_rx) = oneshot::channel();
+        let command = Command::GetSchema {
+            id,
+            resp: schema_resp_tx,
+        };
+        self.command_tx.send(command).await.unwrap();
+        let schema = schema_resp_rx.await.unwrap()?;
+
+        // Build the property
+        let Some(property_def) = schema.get_property_def_by_name(&property_name) else {
+            return Err(AppError::new(
+                ErrorType::UserCommandInvalidRequest,
+                format!("No such property: {}", property_name),
+            ));
+        };
+        let property =
+            Property::from_string(property_def.id, &property_value, &property_def.value_type)?;
+
+        // Send a setconfig request
+        let command2 = Command::SetConfig {
+            id,
+            props: vec![property],
+            resp: resp_tx,
+        };
+        self.command_tx.send(command2).await.unwrap();
+        return Ok(());
+    }
+
     async fn cancel_uid(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
         let specs = vec![Spec::u32("uid", true)];
         let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
@@ -306,6 +385,49 @@ impl Session {
 
     // Utilities ////////////////////////////////////////////////////////////////
 
+    fn tokenize(input: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let mut current = String::new();
+        let mut chars = input.chars().peekable();
+        let mut in_quotes: Option<char> = None;
+
+        while let Some(c) = chars.next() {
+            match c {
+                // entering or exiting quotes
+                '\'' | '"' => {
+                    if in_quotes == Some(c) {
+                        // closing matching quote
+                        in_quotes = None;
+                    } else if in_quotes.is_none() {
+                        // starting new quoted section
+                        in_quotes = Some(c);
+                    } else {
+                        // different quote inside quotes -> treat as normal char
+                        current.push(c);
+                    }
+                }
+
+                // whitespace: token delimiter only when NOT in quotes
+                c if c.is_whitespace() && in_quotes.is_none() => {
+                    if !current.is_empty() {
+                        tokens.push(current.clone());
+                        current.clear();
+                    }
+                }
+
+                // normal character
+                _ => current.push(c),
+            }
+        }
+
+        // push final token if exists
+        if !current.is_empty() {
+            tokens.push(current);
+        }
+
+        tokens
+    }
+
     async fn parse_params(
         &mut self,
         command: &str,
@@ -366,8 +488,8 @@ impl Session {
             Err(e) => {
                 log::warn!("Operation failed: {:?}", e);
                 let error_message = match e.error_type {
-                    ErrorType::Timeout => "timeout\r\n",
-                    _ => "error\r\n",
+                    ErrorType::Timeout => "timeout\r\n".to_string(),
+                    _ => format!("Error: {:?}: {}\r\n", e.error_type, e.message),
                 };
                 self.stream.write_all(error_message.as_bytes()).await?;
             }

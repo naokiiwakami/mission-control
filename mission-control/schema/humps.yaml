@@ -1,0 +1,39 @@
+module_type: 3
+module_type_name: Humps
+properties:
+  - id: 3
+    name: num_voices
+    value_type: u8
+    read_only: true
+  - id: 4
+    name: voice_id
+    value_type: vector_u16
+  - id: 5
+    name: physical_gate_enabled
+    value_type: vector_u8
+  - id: 6
+    name: envelope_generation_mode
+    value_type: vector_u8
+    enum:
+      - DEFAULT
+      - TWO_PHASE_DECAY
+      - LINEAR
+      - GRITTY
+  - id: 7
+    name: attack_time
+    value_type: vector_u16
+  - id: 8
+    name: decay_time
+    value_type: vector_u16
+  - id: 9
+    name: sustain_level
+    value_type: vector_u16
+  - id: 10
+    name: release_time
+    value_type: vector_u16
+  - id: 11
+    name: extra_1
+    value_type: vector_u16
+  - id: 12
+    name: extra_2
+    value_type: vector_u16

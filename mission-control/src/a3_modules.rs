@@ -8,14 +8,15 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::error::AppError;
+use crate::error::{AppError, ErrorType};
 
 #[derive(Debug, Clone)]
 pub struct A3Module {
     pub uid: u32,
     pub id: u8,
-    // name: String,
-    // module_type: u8,
+    pub name: Option<String>,
+    pub module_type: Option<String>,
+    pub module_type_id: Option<u16>,
 }
 
 pub enum Operation {
@@ -32,6 +33,18 @@ pub enum Operation {
     },
     List {
         resp: oneshot::Sender<Result<Vec<A3Module>, AppError>>,
+    },
+    GetById {
+        id: u8,
+        resp: oneshot::Sender<Result<A3Module, AppError>>,
+    },
+    SetProperties {
+        id: u8,
+        name: Option<String>,
+        module_type: Option<String>,
+        module_type_id: Option<u16>,
+        // TODO: Return error when the module is not found
+        // resp: oneshot::Sender<Result<(), AppError>>,
     },
 }
 
@@ -54,7 +67,13 @@ impl A3Modules {
             Some(module) => module.id,
             None => {
                 let new_id = self.find_available_id();
-                let module = A3Module { id: new_id, uid };
+                let module = A3Module {
+                    id: new_id,
+                    uid,
+                    name: Option::None,
+                    module_type: Option::None,
+                    module_type_id: Option::None,
+                };
                 self.modules_by_id.insert(new_id, module.clone());
                 self.modules_by_uid.insert(uid, module);
                 new_id
@@ -64,7 +83,13 @@ impl A3Modules {
     }
 
     pub fn register(&mut self, uid: u32, id: u8) {
-        let module = A3Module { id, uid };
+        let module = A3Module {
+            id,
+            uid,
+            name: Option::None,
+            module_type: Option::None,
+            module_type_id: Option::None,
+        };
         self.modules_by_id.insert(module.id, module.clone());
         self.modules_by_uid.insert(module.uid, module);
     }
@@ -80,7 +105,36 @@ impl A3Modules {
         for (_, module) in &self.modules_by_id {
             modules_list.push(module.clone());
         }
-        return modules_list;
+        modules_list
+    }
+
+    pub fn get_by_id(&self, id: u8) -> Result<A3Module, AppError> {
+        match self.modules_by_id.get(&id) {
+            Some(entry) => Ok(entry.clone()),
+            None => Err(AppError::new(
+                ErrorType::A3ModuleNotFound,
+                format!("No such module ID: {}", id),
+            )),
+        }
+    }
+
+    pub fn set_properties(
+        &mut self,
+        id: u8,
+        name: &Option<String>,
+        module_type: &Option<String>,
+        module_type_id: &Option<u16>,
+    ) {
+        if let Some(module) = self.modules_by_id.get_mut(&id) {
+            module.name = name.clone().or(module.name.clone());
+            module.module_type = module_type.clone().or(module.module_type.clone());
+            module.module_type_id = module_type_id.clone().or(module.module_type_id.clone());
+            if let Some(module2) = self.modules_by_uid.get_mut(&module.uid) {
+                module2.name = name.clone().or(module2.name.clone());
+                module2.module_type = module_type.clone().or(module2.module_type.clone());
+                module2.module_type_id = module_type_id.clone().or(module2.module_type_id.clone());
+            }
+        }
     }
 
     //////////////////////////////////////////////////////////////////
@@ -121,6 +175,18 @@ async fn handle_requests(mut operation_rx: Receiver<Operation>) {
                 Operation::List { resp } => {
                     let modules_list = modules.list();
                     resp.send(Ok(modules_list)).unwrap();
+                }
+                Operation::GetById { id, resp } => {
+                    resp.send(modules.get_by_id(id)).unwrap();
+                }
+                Operation::SetProperties {
+                    id,
+                    name,
+                    module_type,
+                    module_type_id,
+                    // resp,
+                } => {
+                    modules.set_properties(id, &name, &module_type, &module_type_id);
                 }
             }
         }

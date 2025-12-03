@@ -4,7 +4,10 @@ use std::fmt;
 pub enum ErrorType {
     A3OpCodeUnknown,
     A3OpCodeMissing,
+    A3ModuleNotFound,
+    A3SchemaError,
     A3StreamConflict,
+    A3InvalidValue,
     UserCommandUnknown,
     UserCommandStreamIdMissing,
     UserCommandInvalidRequest,
