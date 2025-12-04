@@ -333,7 +333,7 @@ impl<'a> Configuration<'a> {
                         ValueType::U8 => {
                             let enum_index = value.as_u8().unwrap() as usize;
                             if enum_index < enum_names.len() {
-                                enum_names[enum_index].clone()
+                                format!("{} ({})", enum_names[enum_index], enum_index)
                             } else {
                                 "VALUE_OUT_OF_ENUM_RANGE".to_string()
                             }
@@ -345,7 +345,7 @@ impl<'a> Configuration<'a> {
                             .map(|value| {
                                 let index = value.clone() as usize;
                                 if index < enum_names.len() {
-                                    enum_names[index].clone()
+                                    format!("{} ({})", enum_names[index].clone(), index)
                                 } else {
                                     "VALUE_OUT_OF_ENUM_RANGE".to_string()
                                 }
