@@ -86,7 +86,7 @@ impl Session {
                         "get-name" => self.get_name(&command, &tokens).await?,
                         "rename" => self.rename(&command, &tokens).await?,
                         "get-config" => self.get_config(&command, &tokens).await?,
-                        "set-property" => self.set_property(&command, &tokens).await?,
+                        "set" => self.set_property(&command, &tokens).await?,
                         "cancel-uid" => self.cancel_uid(&command, &tokens).await?,
                         "pretend-sign-in" => self.pretend_sign_in(&command, &tokens).await?,
                         "pretend-notify-id" => self.pretend_notify_id(&command, &tokens).await?,

@@ -558,7 +558,7 @@ async fn set_config_core(
     // control the stream
     let mut encoder = PropertyEncoder::new(&props);
     while !encoder.is_done() {
-        let Ok(result) = timeout(Duration::from_secs(120), stream_resp_rx.take().unwrap()).await
+        let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
         else {
             return Err(AppError::timeout());
         };

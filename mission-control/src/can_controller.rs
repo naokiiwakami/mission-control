@@ -79,6 +79,30 @@ impl CanMessage {
         }
     }
 
+    pub fn is_fd(&self) -> bool {
+        unsafe {
+            return (*self.message).is_fd != 0;
+        }
+    }
+
+    pub fn set_fd(&mut self, is_fd: bool) {
+        unsafe {
+            (*self.message).is_fd = is_fd as u8;
+        }
+    }
+
+    pub fn brs(&self) -> bool {
+        unsafe {
+            return (*self.message).brs != 0;
+        }
+    }
+
+    pub fn set_brs(&mut self, brs: bool) {
+        unsafe {
+            (*self.message).brs = brs as u8;
+        }
+    }
+
     pub fn get_data(&self, index: usize) -> u8 {
         unsafe {
             return (*self.message).data[index];
@@ -143,7 +167,9 @@ pub extern "C" fn notify_message(message: *mut can_message_t) {
 fn run_tx(mut tx_receiver: Receiver<CanMessage>) -> JoinHandle<()> {
     return tokio::spawn(async move {
         loop {
-            if let Some(message) = tx_receiver.recv().await {
+            if let Some(mut message) = tx_receiver.recv().await {
+                // message.set_fd(true);
+                // message.set_brs(true);
                 if log::log_enabled!(log::Level::Debug) {
                     let mut data_elements = Vec::<String>::new();
                     for i in 0..message.data_length() as usize {
