@@ -167,7 +167,7 @@ pub extern "C" fn notify_message(message: *mut can_message_t) {
 fn run_tx(mut tx_receiver: Receiver<CanMessage>) -> JoinHandle<()> {
     return tokio::spawn(async move {
         loop {
-            if let Some(mut message) = tx_receiver.recv().await {
+            if let Some(/*mut*/ message) = tx_receiver.recv().await {
                 // message.set_fd(true);
                 // message.set_brs(true);
                 if log::log_enabled!(log::Level::Debug) {
@@ -197,7 +197,9 @@ pub fn start() -> (Sender<CanMessage>, Receiver<CanMessage>, JoinHandle<()>) {
 
     unsafe {
         can_set_rx_message_consumer(Some(notify_message));
-        if can_init() != 0 {
+        let mut config = can_make_default_config();
+        can_set_fd_data_bitrate(&mut config, 4000000);
+        if can_init(&config) != 0 {
             log::error!("Error encountered while initializing CAN controller");
             std::process::exit(1);
         }

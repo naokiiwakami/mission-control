@@ -19,7 +19,7 @@ fn main() {
     // The bindgen::Builder is the main entry point to bindgen,
     // and lets you build up options for the resulting bindings.
     let bindings = bindgen::Builder::default()
-        .clang_arg(format!("-I{}/..", project_dir))
+        .clang_arg(format!("-I{}/../can-controller/include", project_dir))
         // The input header we would like to generate bindings for.
         .header("bindings.h")
         // Tell cargo to invalidate the built crate whenever any of the
