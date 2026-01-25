@@ -2,14 +2,14 @@ pub mod config;
 pub mod schema;
 
 // ID assignments /////////////////////////////////
-pub const A3_ID_MIDI_TIMING_CLOCK: u32 = 0x100;
-pub const A3_ID_MIDI_VOICE_BASE: u32 = 0x101;
-pub const A3_ID_MIDI_REAL_TIME: u32 = 0x140;
+pub const A3_ID_MIDI_TIMING_CLOCK: u16 = 0x100;
+pub const A3_ID_MIDI_VOICE_BASE: u16 = 0x101;
+pub const A3_ID_MIDI_REAL_TIME: u16 = 0x140;
 
-pub const A3_ID_ADMIN_WIRES_BASE: u32 = 0x680;
+pub const A3_ID_ADMIN_WIRES_BASE: u16 = 0x680;
 
-pub const A3_ID_MISSION_CONTROL: u32 = 0x700;
-pub const A3_ID_INDIVIDUAL_MODULE_BASE: u32 = 0x700;
+pub const A3_ID_MISSION_CONTROL: u16 = 0x700;
+pub const A3_ID_INDIVIDUAL_MODULE_BASE: u16 = 0x700;
 
 // Message types //////////////////////////////////
 

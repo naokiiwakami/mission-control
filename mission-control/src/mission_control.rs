@@ -70,7 +70,7 @@ impl MissionControl {
     }
 
     fn handle_standard_message(&mut self, message: CanMessage) {
-        let remote_id = message.id();
+        let remote_id = message.id() as u16;
         if remote_id >= a3::A3_ID_INDIVIDUAL_MODULE_BASE {
             if message.data_length() == 0 {
                 log::debug!("no opcode");
@@ -107,7 +107,7 @@ impl MissionControl {
             };
             modules_tx.send(modules_op).await.unwrap();
             let remote_id = resp_rx.await.unwrap().unwrap();
-            let stream_id = remote_id as u32 + a3::A3_ID_INDIVIDUAL_MODULE_BASE;
+            let stream_id = remote_id as u16 + a3::A3_ID_INDIVIDUAL_MODULE_BASE;
             log::info!(
                 "Assigning module id {:02x} for uid {:08x}",
                 remote_id,
@@ -174,7 +174,7 @@ impl MissionControl {
         let streams_tx = self.streams_tx.clone();
         let op_name = String::from(op_name_src);
         tokio::spawn(async move {
-            let remote_id = in_message.id();
+            let remote_id = in_message.id() as u16;
             let stream_id = remote_id;
             log::debug!("{} reply received; id {:02x}", op_name, remote_id);
             let (get_resp_tx, get_resp_rx) = oneshot::channel();
@@ -296,7 +296,7 @@ impl MissionControl {
                 log::error!("Error in sending back the ping result: {:?}", e);
             }
 
-            terminate_stream(streams_tx, id as u32 + a3::A3_ID_INDIVIDUAL_MODULE_BASE).await;
+            terminate_stream(streams_tx, id as u16 + a3::A3_ID_INDIVIDUAL_MODULE_BASE).await;
         });
     }
 
@@ -403,7 +403,7 @@ async fn ping_core(
     id: u8,
     enable_visual: bool,
 ) -> Result<()> {
-    let stream_id = id as u32 + a3::A3_ID_INDIVIDUAL_MODULE_BASE;
+    let stream_id = id as u16 + a3::A3_ID_INDIVIDUAL_MODULE_BASE;
 
     // start a stream
     let stream_resp_rx = start_stream(streams_tx.clone(), stream_id).await?;
@@ -422,7 +422,7 @@ async fn get_name_core(
     streams_tx: Sender<streams::Operation>,
     can_tx: Sender<CanMessage>,
     id: u8,
-    wire_addr: u32,
+    wire_addr: u16,
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<String> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
@@ -472,7 +472,7 @@ async fn get_config_core(
     can_tx: Sender<CanMessage>,
     modules_tx: Sender<a3_modules::Operation>,
     id: u8,
-    wire_addr: u32,
+    wire_addr: u16,
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<Vec<Property>> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
@@ -546,7 +546,7 @@ async fn set_config_core(
     modules_tx: Sender<a3_modules::Operation>,
     id: u8,
     props: Vec<Property>,
-    wire_addr: u32,
+    wire_addr: u16,
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<()> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
@@ -568,7 +568,7 @@ async fn set_config_core(
             log::warn!("arrived frame is not remote, sending data anyway");
         }
         let mut out_message = CanMessage::new();
-        out_message.set_id(wire_addr);
+        out_message.set_id(wire_addr as u32);
         out_message.set_extended(false);
         out_message.set_remote(false);
         let num_flushed_bytes = encoder.flush(out_message.mut_data());
@@ -602,7 +602,7 @@ async fn set_config_core(
 async fn assign_remote_id(
     streams_tx: Sender<streams::Operation>,
     can_tx: Sender<CanMessage>,
-    stream_id: u32,
+    stream_id: u16,
     remote_id: u8,
     remote_uid: u32,
 ) -> Result<()> {
@@ -634,21 +634,21 @@ async fn assign_remote_id(
 
 async fn start_stream(
     streams_tx: Sender<streams::Operation>,
-    stream_id: u32,
+    stream_id: u16,
 ) -> Result<oneshot::Receiver<CanMessage>> {
     return start_or_continue_stream(streams_tx, stream_id, true).await;
 }
 
 async fn continue_stream(
     streams_tx: Sender<streams::Operation>,
-    stream_id: u32,
+    stream_id: u16,
 ) -> Result<oneshot::Receiver<CanMessage>> {
     return start_or_continue_stream(streams_tx, stream_id, false).await;
 }
 
 async fn create_wire(
     streams_tx: Sender<streams::Operation>,
-) -> Result<(u32, oneshot::Receiver<CanMessage>)> {
+) -> Result<(u16, oneshot::Receiver<CanMessage>)> {
     let (create_resp_tx, create_resp_rx) = oneshot::channel();
     let (stream_resp_tx, stream_resp_rx) = oneshot::channel();
     let operation = streams::Operation::CreateWire {
@@ -679,7 +679,7 @@ async fn create_wire(
 
 async fn start_or_continue_stream(
     streams_tx: Sender<streams::Operation>,
-    stream_id: u32,
+    stream_id: u16,
     is_start: bool,
 ) -> Result<oneshot::Receiver<CanMessage>> {
     let (start_resp_tx, start_resp_rx) = oneshot::channel();
@@ -714,7 +714,7 @@ async fn start_or_continue_stream(
     return Ok(stream_resp_rx);
 }
 
-async fn terminate_stream(streams_tx: Sender<streams::Operation>, stream_id: u32) {
+async fn terminate_stream(streams_tx: Sender<streams::Operation>, stream_id: u16) {
     let (term_resp_tx, term_resp_rx) = oneshot::channel();
     streams_tx
         .send(streams::Operation::Terminate {

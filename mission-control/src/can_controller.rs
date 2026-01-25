@@ -7,6 +7,8 @@ use tokio::{
     task::JoinHandle,
 };
 
+use crate::analog3::A3_ID_ADMIN_WIRES_BASE;
+
 #[derive(Debug)]
 pub struct CanMessage {
     pub message: *mut can_message_t,
@@ -167,9 +169,9 @@ pub extern "C" fn notify_message(message: *mut can_message_t) {
 fn run_tx(mut tx_receiver: Receiver<CanMessage>) -> JoinHandle<()> {
     return tokio::spawn(async move {
         loop {
-            if let Some(/*mut*/ message) = tx_receiver.recv().await {
-                // message.set_fd(true);
-                // message.set_brs(true);
+            if let Some(mut message) = tx_receiver.recv().await {
+                message.set_fd(true);
+                message.set_brs(true);
                 if log::log_enabled!(log::Level::Debug) {
                     let mut data_elements = Vec::<String>::new();
                     for i in 0..message.data_length() as usize {
@@ -197,8 +199,14 @@ pub fn start() -> (Sender<CanMessage>, Receiver<CanMessage>, JoinHandle<()>) {
 
     unsafe {
         can_set_rx_message_consumer(Some(notify_message));
-        let mut config = can_make_default_config();
-        can_set_fd_data_bitrate(&mut config, 4000000);
+
+        let mut sys_config = can_make_default_system_config();
+        sys_config.osc_clock_hz = 4_000_000;
+        sys_config.device.osc_pll_enabled = 1;
+
+        let mut config = can_make_default_config(&sys_config);
+        can_set_bitrate(&mut config, 1_000_000);
+        can_set_fd_data_bitrate(&mut config, 4_000_000);
         if can_init(&config) != 0 {
             log::error!("Error encountered while initializing CAN controller");
             std::process::exit(1);
@@ -212,7 +220,7 @@ pub fn start() -> (Sender<CanMessage>, Receiver<CanMessage>, JoinHandle<()>) {
         if result_clear != 0 {
             log::error!("Failed to clear CAN filter; error={}", result_clear);
         }
-        let result_std = can_filter_add_std_id_gte(handle, 0x680);
+        let result_std = can_filter_add_std_id_gte(handle, A3_ID_ADMIN_WIRES_BASE);
         if result_std != 0 {
             log::error!("Failed to set filter for STD IDs; error={}", result_std);
         }

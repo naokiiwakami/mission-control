@@ -4,7 +4,7 @@ use crate::{analog3 as a3, can_controller::CanMessage};
 
 pub async fn sign_in(can_tx: Sender<CanMessage>) {
     let mut out_message = CanMessage::new();
-    out_message.set_id(a3::A3_ID_MISSION_CONTROL);
+    out_message.set_id(a3::A3_ID_MISSION_CONTROL as u32);
     out_message.set_data_length(1);
     out_message.set_data(0, a3::A3_MC_SIGN_IN);
     can_tx.send(out_message).await.unwrap();
@@ -12,7 +12,7 @@ pub async fn sign_in(can_tx: Sender<CanMessage>) {
 
 pub async fn assign_module_id(can_tx: Sender<CanMessage>, remote_uid: u32, remote_id: u8) {
     let mut out_message = CanMessage::new();
-    out_message.set_id(a3::A3_ID_MISSION_CONTROL);
+    out_message.set_id(a3::A3_ID_MISSION_CONTROL as u32);
     out_message.set_data_length(6);
     out_message.set_data(0, a3::A3_MC_ASSIGN_MODULE_ID);
     out_message.set_data(1, ((remote_uid >> 24) & 0xff) as u8);
@@ -25,7 +25,7 @@ pub async fn assign_module_id(can_tx: Sender<CanMessage>, remote_uid: u32, remot
 
 pub async fn ping(can_tx: Sender<CanMessage>, remote_id: u8, enable_visual: bool) {
     let mut out_message = CanMessage::new();
-    out_message.set_id(a3::A3_ID_MISSION_CONTROL);
+    out_message.set_id(a3::A3_ID_MISSION_CONTROL as u32);
     let length = if enable_visual { 3 } else { 2 };
     out_message.set_data_length(length);
     out_message.set_data(0, a3::A3_MC_PING);
@@ -89,7 +89,7 @@ async fn send_op_and_id(can_tx: Sender<CanMessage>, opcode: u8, remote_id: u8) {
 
 fn make_mission_control_message(opcode: u8, remote_id: u8) -> CanMessage {
     let mut out_message = CanMessage::new();
-    out_message.set_id(a3::A3_ID_MISSION_CONTROL);
+    out_message.set_id(a3::A3_ID_MISSION_CONTROL as u32);
     out_message.set_extended(false);
     out_message.set_data_length(2);
     out_message.set_data(0, opcode);

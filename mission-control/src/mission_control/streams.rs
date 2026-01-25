@@ -15,25 +15,25 @@ type Result<T> = std::result::Result<T, StreamError>;
 
 pub enum Operation {
     Start {
-        stream_id: u32,
+        stream_id: u16,
         op_resp: oneshot::Sender<Result<()>>,
         stream_resp: oneshot::Sender<CanMessage>,
     },
     CreateWire {
-        op_resp: oneshot::Sender<Result<u32>>,
+        op_resp: oneshot::Sender<Result<u16>>,
         stream_resp: oneshot::Sender<CanMessage>,
     },
     Get {
-        stream_id: u32,
+        stream_id: u16,
         op_resp: oneshot::Sender<Result<oneshot::Sender<CanMessage>>>,
     },
     Continue {
-        stream_id: u32,
+        stream_id: u16,
         op_resp: oneshot::Sender<Result<()>>,
         stream_resp: oneshot::Sender<CanMessage>,
     },
     Terminate {
-        stream_id: u32,
+        stream_id: u16,
         op_resp: oneshot::Sender<Result<()>>,
     },
 }
@@ -86,7 +86,7 @@ pub fn start() -> (Sender<Operation>, JoinHandle<()>) {
 }
 
 struct StreamManager {
-    streams: HashMap<u32, Stream>,
+    streams: HashMap<u16, Stream>,
 }
 
 impl StreamManager {
@@ -117,7 +117,10 @@ impl StreamManager {
                                 Ok(()) => Ok(wire_id),
                                 Err(e) => Err(e),
                             },
-                            None => Err(StreamError::new(ErrorType::Busy)),
+                            None => {
+                                log::warn!("No available wires found");
+                                Err(StreamError::new(ErrorType::Busy))
+                            }
                         };
                         op_resp.send(response).unwrap();
                     }
@@ -159,10 +162,11 @@ impl StreamManager {
 
     fn start_stream(
         &mut self,
-        stream_id: u32,
+        stream_id: u16,
         stream_resp: oneshot::Sender<CanMessage>,
     ) -> Result<()> {
         if self.streams.contains_key(&stream_id) {
+            log::warn!("stream already created: {}", stream_id);
             Err(StreamError::new(ErrorType::Busy))
         } else {
             self.streams.insert(stream_id, Stream::new(stream_resp));
@@ -170,9 +174,9 @@ impl StreamManager {
         }
     }
 
-    fn find_available_wire(&mut self) -> Option<u32> {
+    fn find_available_wire(&mut self) -> Option<u16> {
         for id in 0..64 {
-            let wire_id = a3::A3_ID_ADMIN_WIRES_BASE + id as u32;
+            let wire_id = a3::A3_ID_ADMIN_WIRES_BASE + id as u16;
             if !self.streams.contains_key(&wire_id) {
                 return Some(wire_id);
             }
