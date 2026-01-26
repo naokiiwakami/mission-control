@@ -205,7 +205,7 @@ pub fn start() -> (Sender<CanMessage>, Receiver<CanMessage>, JoinHandle<()>) {
         sys_config.device.osc_pll_enabled = 1;
 
         let mut config = can_make_default_config(&sys_config);
-        can_set_bitrate(&mut config, 1_000_000);
+        can_set_bitrate(&mut config, 2_000_000);
         can_set_fd_data_bitrate(&mut config, 4_000_000);
         if can_init(&config) != 0 {
             log::error!("Error encountered while initializing CAN controller");

@@ -41,10 +41,21 @@ impl MissionControl {
     // incoming message handling /////////////////////////////////////////////////////////
 
     pub fn handle_can_message(&mut self, message: CanMessage) {
-        log::debug!("Message received: id={:08x}", message.id());
         if message.is_extended() {
+            log::debug!("Message received: id={:08x}", message.id());
             self.handle_extended_message(message);
         } else {
+            if log::log_enabled!(log::Level::Debug) {
+                let mut data_elements = Vec::<String>::new();
+                for i in 0..message.data_length() as usize {
+                    data_elements.push(format!("{:02x}", message.data()[i]));
+                }
+                log::debug!(
+                    "Message received: id={:04x} data={}",
+                    message.id() as u16,
+                    data_elements.join(" ")
+                );
+            }
             self.handle_standard_message(message);
         }
     }
@@ -422,14 +433,14 @@ async fn get_name_core(
     streams_tx: Sender<streams::Operation>,
     can_tx: Sender<CanMessage>,
     id: u8,
-    wire_addr: u16,
+    wire_id: u16,
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<String> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
-    let wire_id = (wire_addr - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
+    let wire_addr = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     // send request message
-    a3_message::request_name(can_tx.clone(), id, wire_id).await;
+    a3_message::request_name(can_tx.clone(), id, wire_addr).await;
 
     // control the stream
     let mut chunk_parser = ChunkParser::for_single_field();
@@ -456,8 +467,8 @@ async fn get_name_core(
                         }
                     };
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_addr).await?);
-                a3_message::continue_name(can_tx.clone(), id).await;
+                stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
+                a3_message::continue_stream(can_tx.clone(), id, wire_addr).await;
             }
             Err(e) => {
                 let message = format!("GetName: Data parsing failed: {:?}", e);
@@ -472,14 +483,14 @@ async fn get_config_core(
     can_tx: Sender<CanMessage>,
     modules_tx: Sender<a3_modules::Operation>,
     id: u8,
-    wire_addr: u16,
+    wire_id: u16,
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<Vec<Property>> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
-    let wire_id = (wire_addr - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
+    let wire_addr = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     // send request message
-    a3_message::request_config(can_tx.clone(), id, wire_id).await;
+    a3_message::request_config(can_tx.clone(), id, wire_addr).await;
 
     // control the stream
     let mut chunk_parser = ChunkParser::new();
@@ -529,8 +540,8 @@ async fn get_config_core(
                     modules_tx.send(modules_op).await.unwrap();
                     return Ok(properties);
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_addr).await?);
-                a3_message::continue_config(can_tx.clone(), id).await;
+                stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
+                a3_message::continue_stream(can_tx.clone(), id, wire_addr).await;
             }
             Err(e) => {
                 let message = format!("GetName: Data parsing failed: {:?}", e);

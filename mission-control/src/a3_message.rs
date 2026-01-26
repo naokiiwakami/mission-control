@@ -36,26 +36,25 @@ pub async fn ping(can_tx: Sender<CanMessage>, remote_id: u8, enable_visual: bool
     can_tx.send(out_message).await.unwrap();
 }
 
-pub async fn request_name(can_tx: Sender<CanMessage>, id: u8, wire_id: u8) {
+pub async fn request_name(can_tx: Sender<CanMessage>, id: u8, wire_addr: u8) {
     let mut out_message = make_mission_control_message(a3::A3_MC_REQUEST_NAME, id);
-    out_message.set_data(2, wire_id);
+    out_message.set_data(2, wire_addr);
     out_message.set_data_length(3);
     can_tx.send(out_message).await.unwrap();
 }
 
-pub async fn continue_name(can_tx: Sender<CanMessage>, remote_id: u8) {
-    send_op_and_id(can_tx, a3::A3_MC_CONTINUE_NAME, remote_id).await;
-}
-
-pub async fn request_config(can_tx: Sender<CanMessage>, id: u8, wire_id: u8) {
+pub async fn request_config(can_tx: Sender<CanMessage>, id: u8, wire_addr: u8) {
     let mut out_message = make_mission_control_message(a3::A3_MC_REQUEST_CONFIG, id);
-    out_message.set_data(2, wire_id);
+    out_message.set_data(2, wire_addr);
     out_message.set_data_length(3);
     can_tx.send(out_message).await.unwrap();
 }
 
-pub async fn continue_config(can_tx: Sender<CanMessage>, remote_id: u8) {
-    send_op_and_id(can_tx, a3::A3_MC_CONTINUE_CONFIG, remote_id).await;
+pub async fn continue_stream(can_tx: Sender<CanMessage>, remote_id: u8, wire_addr: u8) {
+    let mut out_message = make_mission_control_message(a3::A3_MC_CONTINUE_STREAM, remote_id);
+    out_message.set_data(2, wire_addr);
+    out_message.set_data_length(3);
+    can_tx.send(out_message).await.unwrap();
 }
 
 pub async fn modify_config(can_tx: Sender<CanMessage>, id: u8, wire_id: u8) {
