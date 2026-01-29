@@ -117,9 +117,9 @@ impl CanMessage {
         }
     }
 
-    pub fn data(&self) -> [u8; 8usize] {
+    pub fn data(&self) -> &[u8; 8usize] {
         unsafe {
-            return (*self.message).data;
+            return &(*self.message).data;
         }
     }
 

@@ -36,15 +36,8 @@ pub async fn ping(can_tx: Sender<CanMessage>, remote_id: u8, enable_visual: bool
     can_tx.send(out_message).await.unwrap();
 }
 
-pub async fn request_name(can_tx: Sender<CanMessage>, id: u8, wire_addr: u8) {
-    let mut out_message = make_mission_control_message(a3::A3_MC_REQUEST_NAME, id);
-    out_message.set_data(2, wire_addr);
-    out_message.set_data_length(3);
-    can_tx.send(out_message).await.unwrap();
-}
-
-pub async fn request_config(can_tx: Sender<CanMessage>, id: u8, wire_addr: u8) {
-    let mut out_message = make_mission_control_message(a3::A3_MC_REQUEST_CONFIG, id);
+pub async fn request_command(can_tx: Sender<CanMessage>, opcode: u8, id: u8, wire_addr: u8) {
+    let mut out_message = make_mission_control_message(opcode, id);
     out_message.set_data(2, wire_addr);
     out_message.set_data_length(3);
     can_tx.send(out_message).await.unwrap();
@@ -78,11 +71,6 @@ pub async fn im_notify_id(can_tx: Sender<CanMessage>, uid: u32, id: u8) {
     let mut out_message = make_message_by_uid(uid, a3::A3_ADMIN_SIGN_IN);
     out_message.set_data(1, id);
     out_message.set_data_length(2);
-    can_tx.send(out_message).await.unwrap();
-}
-
-async fn send_op_and_id(can_tx: Sender<CanMessage>, opcode: u8, remote_id: u8) {
-    let out_message = make_mission_control_message(opcode, remote_id);
     can_tx.send(out_message).await.unwrap();
 }
 

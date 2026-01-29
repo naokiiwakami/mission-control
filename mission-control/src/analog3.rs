@@ -1,6 +1,8 @@
 pub mod config;
 pub mod schema;
 
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+
 // ID assignments /////////////////////////////////
 pub const A3_ID_MIDI_TIMING_CLOCK: u16 = 0x100;
 pub const A3_ID_MIDI_VOICE_BASE: u16 = 0x101;
@@ -11,7 +13,7 @@ pub const A3_ID_ADMIN_WIRES_BASE: u16 = 0x680;
 pub const A3_ID_MISSION_CONTROL: u16 = 0x700;
 pub const A3_ID_INDIVIDUAL_MODULE_BASE: u16 = 0x700;
 
-// Message types //////////////////////////////////
+// Message opcodes //////////////////////////////////
 
 /* MIDI channel voice messages */
 pub const A3_VOICE_MSG_SET_NOTE: u8 = 0x07;
@@ -44,6 +46,18 @@ pub const A3_IM_REPLY_PING: u8 = 0x01;
 pub const A3_IM_ID_ASSIGN_ACK: u8 = 0x02;
 
 pub const A3_DATA_LENGTH: u8 = 8;
+
+// Stream statuses ////////////////////////////////
+
+#[derive(Debug, IntoPrimitive, TryFromPrimitive)]
+#[repr(u8)]
+pub enum StreamStatus {
+    Ready = 0x0,
+    Busy = 0x1,
+    NotSupported = 0x2,
+}
+
+// Properties /////////////////////////////////////
 
 /* Common property types */
 pub const A3_PROP_MODULE_UID: u8 = 0;

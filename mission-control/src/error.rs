@@ -8,6 +8,8 @@ pub enum ErrorType {
     A3SchemaError,
     A3StreamConflict,
     A3InvalidValue,
+    A3ProtocolError,
+    A3CommunicationError,
     UserCommandUnknown,
     UserCommandStreamIdMissing,
     UserCommandInvalidRequest,

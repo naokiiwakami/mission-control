@@ -1,23 +1,21 @@
 mod streams;
 
-use std::time::Duration;
-
-use tokio::{
-    sync::{mpsc::Sender, oneshot},
-    time::timeout,
-};
-
 use crate::{
     a3_message,
     a3_modules::{self, A3Module},
     analog3::{
-        self as a3, A3_PROP_MODULE_TYPE, A3_PROP_NAME,
+        self as a3, A3_PROP_MODULE_TYPE, A3_PROP_NAME, StreamStatus,
         config::{ChunkParser, Property, PropertyEncoder},
         schema::{MODULES_SCHEMA, ModuleDef, ValueType},
     },
     can_controller::CanMessage,
     command::Command,
     error::{AppError, ErrorType},
+};
+
+use tokio::{
+    sync::{mpsc::Sender, oneshot},
+    time::{Duration, sleep, timeout},
 };
 
 type Result<T> = std::result::Result<T, AppError>;
@@ -440,11 +438,21 @@ async fn get_name_core(
     let wire_addr = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     // send request message
-    a3_message::request_name(can_tx.clone(), id, wire_addr).await;
+    initiate_stream(
+        &streams_tx,
+        &can_tx,
+        a3::A3_MC_REQUEST_NAME,
+        id,
+        wire_id,
+        &mut stream_resp_rx,
+    )
+    .await?;
 
     // control the stream
     let mut chunk_parser = ChunkParser::for_single_field();
     loop {
+        stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
+        a3_message::continue_stream(can_tx.clone(), id, wire_addr).await;
         let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
         else {
             return Err(AppError::timeout());
@@ -467,8 +475,6 @@ async fn get_name_core(
                         }
                     };
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
-                a3_message::continue_stream(can_tx.clone(), id, wire_addr).await;
             }
             Err(e) => {
                 let message = format!("GetName: Data parsing failed: {:?}", e);
@@ -487,14 +493,23 @@ async fn get_config_core(
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<Vec<Property>> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
-    let wire_addr = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
+    let wire_num = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
-    // send request message
-    a3_message::request_config(can_tx.clone(), id, wire_addr).await;
+    initiate_stream(
+        &streams_tx,
+        &can_tx,
+        a3::A3_MC_REQUEST_CONFIG,
+        id,
+        wire_id,
+        &mut stream_resp_rx,
+    )
+    .await?;
 
     // control the stream
     let mut chunk_parser = ChunkParser::new();
     loop {
+        stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
+        a3_message::continue_stream(can_tx.clone(), id, wire_num).await;
         let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
         else {
             return Err(AppError::timeout());
@@ -540,8 +555,6 @@ async fn get_config_core(
                     modules_tx.send(modules_op).await.unwrap();
                     return Ok(properties);
                 }
-                stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
-                a3_message::continue_stream(can_tx.clone(), id, wire_addr).await;
             }
             Err(e) => {
                 let message = format!("GetName: Data parsing failed: {:?}", e);
@@ -549,6 +562,67 @@ async fn get_config_core(
             }
         }
     }
+}
+
+/// send request message and see if the counterpart is ready.
+async fn initiate_stream(
+    streams_tx: &Sender<streams::Operation>,
+    can_tx: &Sender<CanMessage>,
+    opcode: u8,
+    id: u8,
+    wire_id: u16,
+    stream_resp_rx: &mut Option<oneshot::Receiver<CanMessage>>,
+) -> Result<()> {
+    let wire_num = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
+
+    const MAX_TRIALS: usize = 3;
+    let mut num_trials = 0usize;
+    let mut sleep_millis = 100u64;
+    loop {
+        a3_message::request_command(can_tx.clone(), opcode, id, wire_num).await;
+        if let Ok(resp) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await {
+            let message = resp.unwrap();
+            if message.data_length() < 1 {
+                return Err(AppError::new(
+                    ErrorType::A3ProtocolError,
+                    "Status is missing in response".to_string(),
+                ));
+            }
+            let Ok(status) = StreamStatus::try_from(message.data()[0]) else {
+                return Err(AppError::new(
+                    ErrorType::A3InvalidValue,
+                    format!("status {}", message.data()[0]),
+                ));
+            };
+            match status {
+                StreamStatus::Ready => {
+                    break;
+                }
+                StreamStatus::Busy => {
+                    // continue
+                }
+                _ => {
+                    return Err(AppError::new(
+                        ErrorType::A3CommunicationError,
+                        format!("status {:?}", status),
+                    ));
+                }
+            }
+        } else {
+            return Err(AppError::timeout());
+        };
+        num_trials += 1;
+        if num_trials == MAX_TRIALS {
+            return Err(AppError::new(
+                ErrorType::A3CommunicationError,
+                "Remote peer is busy".to_string(),
+            ));
+        }
+        sleep(Duration::from_millis(sleep_millis)).await;
+        sleep_millis *= 2;
+        stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
+    }
+    Ok(())
 }
 
 async fn set_config_core(
