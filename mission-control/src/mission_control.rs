@@ -4,7 +4,7 @@ use crate::{
     a3_message,
     a3_modules::{self, A3Module},
     analog3::{
-        self as a3, A3_PROP_MODULE_TYPE, A3_PROP_NAME, StreamStatus,
+        self as a3, PropertyId, StreamStatus,
         config::{ChunkParser, Property, PropertyEncoder},
         schema::{MODULES_SCHEMA, ModuleDef, ValueType},
     },
@@ -529,11 +529,14 @@ async fn get_config_core(
                     let mut module_type: Option<String> = None;
                     let mut module_type_id: Option<u16> = None;
                     for property in &properties {
-                        match property.id {
-                            A3_PROP_NAME => {
+                        let Ok(property_id) = PropertyId::try_from(property.id) else {
+                            continue;
+                        };
+                        match property_id {
+                            PropertyId::Name => {
                                 name.replace(property.get_value_as_string().unwrap());
                             }
-                            A3_PROP_MODULE_TYPE => {
+                            PropertyId::ModuleType => {
                                 let type_id: u16 = property
                                     .get_value_with_type(&ValueType::U16)
                                     .as_u16()
@@ -665,7 +668,7 @@ async fn set_config_core(
     }
     let mut name: Option<String> = None;
     for prop in &props {
-        if prop.id == A3_PROP_NAME {
+        if prop.id == PropertyId::Name as u8 {
             name.replace(prop.get_value_as_string().unwrap());
             break;
         }

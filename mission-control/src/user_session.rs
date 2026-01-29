@@ -191,7 +191,7 @@ impl Session {
         let (resp_tx, resp_rx) = oneshot::channel();
         let id = params[0].as_u8().unwrap();
         let new_name = params[1].as_text().unwrap();
-        let property = Property::text(a3::A3_PROP_NAME, &new_name);
+        let property = Property::text(a3::PropertyId::Name as u8, &new_name);
         let command = Command::SetConfig {
             id,
             props: vec![property],

@@ -5,7 +5,7 @@ use std::fmt;
 use crate::error::{AppError, ErrorType};
 
 use super::{
-    A3_PROP_MODULE_TYPE,
+    PropertyId,
     schema::{COMMON_MODULE_DEF, MODULES_SCHEMA, ModuleDef, ValueType},
 };
 
@@ -286,7 +286,7 @@ impl<'a> Configuration<'a> {
     pub fn with_schema(properties: Vec<Property>, schema: &'a BTreeMap<u16, ModuleDef>) -> Self {
         let mut module_type = 0xffff;
         for property in &properties {
-            if property.id == A3_PROP_MODULE_TYPE {
+            if property.id == PropertyId::ModuleType as u8 {
                 if let Ok(value) = property.get_value_with_type(&ValueType::U16).as_u16() {
                     module_type = value;
                 } else {
@@ -623,7 +623,7 @@ impl<'a> PropertyEncoder<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::A3_PROP_NAME;
+    use super::super::PropertyId;
     use super::super::schema::load_schema;
     use super::*;
 
@@ -830,7 +830,10 @@ mod tests {
 
     #[test]
     fn test_encode_string() {
-        let prop = Property::text(A3_PROP_NAME, &"Analog3 mission control".to_string());
+        let prop = Property::text(
+            PropertyId::Name as u8,
+            &"Analog3 mission control".to_string(),
+        );
         let props = vec![prop];
         let mut encoder = PropertyEncoder::new(&props);
 
@@ -857,7 +860,7 @@ mod tests {
 
     #[test]
     fn test_two_props() {
-        let prop1 = Property::text(A3_PROP_NAME, &"Analog3".to_string());
+        let prop1 = Property::text(PropertyId::Name as u8, &"Analog3".to_string());
         let prop2 = Property::u32(3, 0xbd093ca7);
         let props = vec![prop1, prop2];
         let mut encoder = PropertyEncoder::new(&props);

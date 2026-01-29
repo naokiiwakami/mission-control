@@ -45,9 +45,7 @@ pub const A3_MC_MODIFY_CONFIG: u8 = 0x08;
 pub const A3_IM_REPLY_PING: u8 = 0x01;
 pub const A3_IM_ID_ASSIGN_ACK: u8 = 0x02;
 
-pub const A3_DATA_LENGTH: u8 = 8;
-
-// Stream statuses ////////////////////////////////
+// Stream ////////////////////////////////
 
 #[derive(Debug, IntoPrimitive, TryFromPrimitive)]
 #[repr(u8)]
@@ -57,9 +55,16 @@ pub enum StreamStatus {
     NotSupported = 0x2,
 }
 
+pub const A3_STREAM_PAYLOAD_SIZE: usize = 8;
+
 // Properties /////////////////////////////////////
 
 /* Common property types */
-pub const A3_PROP_MODULE_UID: u8 = 0;
-pub const A3_PROP_MODULE_TYPE: u8 = 1;
-pub const A3_PROP_NAME: u8 = 2;
+
+#[derive(Debug, IntoPrimitive, TryFromPrimitive)]
+#[repr(u8)]
+pub enum PropertyId {
+    ModuleUid = 0,
+    ModuleType = 1,
+    Name = 2,
+}

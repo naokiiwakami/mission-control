@@ -19,13 +19,17 @@ async fn main() {
         .format(|buf, record| {
             let ts = buf.timestamp_millis();
             let module_path = record.module_path().unwrap_or("<unknown>");
+            let file = record.file().unwrap_or("<unknown>");
+            let line = record.line().map_or("?".into(), |l| l.to_string());
             writeln!(
                 buf,
-                "[{} {:5} {}] {}",
+                "[{} {:5} {}] {} ({}:{})",
                 ts,
                 record.level(),
                 module_path,
-                record.args()
+                record.args(),
+                file,
+                line,
             )
         })
         .init();
