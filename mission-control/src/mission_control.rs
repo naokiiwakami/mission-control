@@ -435,9 +435,8 @@ async fn get_name_core(
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<String> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
-    let wire_addr = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
-    // send request message
+    // tell the peer to start the stream
     initiate_stream_command(
         &streams_tx,
         &can_tx,
@@ -452,7 +451,7 @@ async fn get_name_core(
     let mut chunk_parser = ChunkParser::for_single_field();
     loop {
         stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
-        a3_message::continue_stream(can_tx.clone(), id, wire_addr).await;
+        a3_message::request_to_continue(can_tx.clone(), wire_id).await;
         let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
         else {
             return Err(AppError::timeout());
@@ -493,7 +492,6 @@ async fn get_config_core(
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<Vec<Property>> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
-    let wire_num = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     initiate_stream_command(
         &streams_tx,
@@ -509,7 +507,7 @@ async fn get_config_core(
     let mut chunk_parser = ChunkParser::new();
     loop {
         stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
-        a3_message::continue_stream(can_tx.clone(), id, wire_num).await;
+        a3_message::request_to_continue(can_tx.clone(), wire_id).await;
         let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
         else {
             return Err(AppError::timeout());

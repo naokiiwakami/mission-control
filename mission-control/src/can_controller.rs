@@ -45,6 +45,20 @@ impl CanMessage {
         }
     }
 
+    pub fn set_std_id(&mut self, std_id: u16) {
+        unsafe {
+            (*self.message).id = std_id as u32;
+            (*self.message).is_extended = 0;
+        }
+    }
+
+    pub fn set_ext_id(&mut self, ext_id: u32) {
+        unsafe {
+            (*self.message).id = ext_id;
+            (*self.message).is_extended = 1;
+        }
+    }
+
     pub fn is_extended(&self) -> bool {
         unsafe {
             return (*self.message).is_extended != 0;
