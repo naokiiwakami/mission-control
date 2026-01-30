@@ -11,8 +11,10 @@ use tokio::{
 };
 
 use crate::{
-    analog3 as a3,
-    analog3::config::{Configuration, Property, Value},
+    analog3::{
+        A3_PROP_ID_NAME,
+        config::{Configuration, Property, Value},
+    },
     command::Command,
     error::{AppError, ErrorType},
     user_session::spec::Spec,
@@ -191,7 +193,7 @@ impl Session {
         let (resp_tx, resp_rx) = oneshot::channel();
         let id = params[0].as_u8().unwrap();
         let new_name = params[1].as_text().unwrap();
-        let property = Property::text(a3::PropertyId::Name as u8, &new_name);
+        let property = Property::text(A3_PROP_ID_NAME, &new_name);
         let command = Command::SetConfig {
             id,
             props: vec![property],
@@ -223,10 +225,12 @@ impl Session {
                 let mut longest = 0;
 
                 for i in 0..config.len() {
+                    let id = config.prop_id(i);
                     let name = config.prop_name(i);
                     let value = config.prop_value_as_string(i);
-                    longest = max(name.len(), longest);
-                    key_values.push((name, value));
+                    let left = format!("({:3}) {}", id, name);
+                    longest = max(left.len(), longest);
+                    key_values.push((left, value));
                 }
 
                 let mut lines = Vec::<String>::new();

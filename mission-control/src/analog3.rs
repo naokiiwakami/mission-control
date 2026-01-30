@@ -61,11 +61,6 @@ pub const A3_STREAM_PAYLOAD_SIZE: usize = 8;
 // Properties /////////////////////////////////////
 
 /* Common property types */
-
-#[derive(Debug, IntoPrimitive, TryFromPrimitive)]
-#[repr(u8)]
-pub enum PropertyId {
-    ModuleUid = 0,
-    ModuleType = 1,
-    Name = 2,
-}
+pub const A3_PROP_ID_MODULE_UID: u8 = 0;
+pub const A3_PROP_ID_MODULE_TYPE: u8 = 1;
+pub const A3_PROP_ID_NAME: u8 = 2;

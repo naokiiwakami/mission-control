@@ -5,7 +5,7 @@ use std::{cmp::min, num::ParseIntError};
 use crate::error::{AppError, ErrorType};
 
 use super::{
-    PropertyId,
+    A3_PROP_ID_MODULE_TYPE,
     schema::{COMMON_MODULE_DEF, MODULES_SCHEMA, ModuleDef, ValueType},
 };
 
@@ -286,7 +286,7 @@ impl<'a> Configuration<'a> {
     pub fn with_schema(properties: Vec<Property>, schema: &'a BTreeMap<u16, ModuleDef>) -> Self {
         let mut module_type = 0xffff;
         for property in &properties {
-            if property.id == PropertyId::ModuleType as u8 {
+            if property.id == A3_PROP_ID_MODULE_TYPE {
                 if let Ok(value) = property.get_value_with_type(&ValueType::U16).as_u16() {
                     module_type = value;
                 } else {
@@ -313,11 +313,16 @@ impl<'a> Configuration<'a> {
         self.properties.len()
     }
 
+    pub fn prop_id(&self, index: usize) -> u8 {
+        let property = &self.properties[index];
+        property.id
+    }
+
     pub fn prop_name(&self, index: usize) -> String {
         let property = &self.properties[index];
         match self.module_def.properties.get(&property.id) {
-            Some(prop_def) => format!("({:3}) {}", property.id, prop_def.name),
-            None => format!("({:3}) unknown", property.id),
+            Some(prop_def) => prop_def.name.clone(),
+            None => "unknown".to_string(),
         }
     }
 
@@ -623,7 +628,7 @@ impl<'a> PropertyEncoder<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::PropertyId;
+    use super::super::A3_PROP_ID_NAME;
     use super::super::schema::load_schema;
     use super::*;
 
@@ -788,10 +793,10 @@ mod tests {
     #[test]
     fn test_load_config() {
         let data = [
-            b"\x05\x00\x04\x1a\xce\xbe\xef",
+            b"\x06\x00\x04\x1a\xce\xbe\xef",
             b"\x01\x02\x23\x45\x02\x06m",
             b"odule\x03\x01",
-            b"\x02\x04\x01\x01\0\0\0",
+            b"\x02\x04\x01\x01\x07\x01\x01",
         ];
 
         let schema = load_schema("test-schema");
@@ -806,17 +811,26 @@ mod tests {
                         let config = Configuration::with_schema(properties, &schema);
                         assert_eq!(config.module_type, 0x2345);
                         assert_eq!(config.module_type_name.as_str(), "test-module");
-                        assert_eq!(config.len(), 5);
+                        assert_eq!(config.len(), 6);
                         assert_eq!(config.prop_name(0), "module_uid");
                         assert_eq!(config.prop_value_as_string(0), "1acebeef");
+                        assert_eq!(config.prop_id(0), 0);
                         assert_eq!(config.prop_name(1), "module_type");
                         assert_eq!(config.prop_value_as_string(1), "2345");
+                        assert_eq!(config.prop_id(1), 1);
                         assert_eq!(config.prop_name(2), "name");
+                        assert_eq!(config.prop_id(5), 7);
                         assert_eq!(config.prop_value_as_string(2), "module");
+                        assert_eq!(config.prop_id(2), 2);
                         assert_eq!(config.prop_name(3), "num_voices");
                         assert_eq!(config.prop_value_as_string(3), "02");
+                        assert_eq!(config.prop_id(3), 3);
                         assert_eq!(config.prop_name(4), "key_assign_mode");
-                        assert_eq!(config.prop_value_as_string(4), "UNISON");
+                        assert_eq!(config.prop_value_as_string(4), "UNISON (1)");
+                        assert_eq!(config.prop_id(4), 4);
+                        assert_eq!(config.prop_name(5), "retrigger");
+                        assert_eq!(config.prop_value_as_string(5), "true");
+                        assert_eq!(config.prop_id(5), 7);
                         break;
                     }
                 }
@@ -830,10 +844,7 @@ mod tests {
 
     #[test]
     fn test_encode_string() {
-        let prop = Property::text(
-            PropertyId::Name as u8,
-            &"Analog3 mission control".to_string(),
-        );
+        let prop = Property::text(A3_PROP_ID_NAME, &"Analog3 mission control".to_string());
         let props = vec![prop];
         let mut encoder = PropertyEncoder::new(&props);
 
@@ -860,7 +871,7 @@ mod tests {
 
     #[test]
     fn test_two_props() {
-        let prop1 = Property::text(PropertyId::Name as u8, &"Analog3".to_string());
+        let prop1 = Property::text(A3_PROP_ID_NAME, &"Analog3".to_string());
         let prop2 = Property::u32(3, 0xbd093ca7);
         let props = vec![prop1, prop2];
         let mut encoder = PropertyEncoder::new(&props);

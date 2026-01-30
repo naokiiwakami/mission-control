@@ -230,7 +230,7 @@ mod tests {
         };
         assert_eq!(entry.module_type, 1);
         assert_eq!(entry.module_type_name, "cv-depot".to_string());
-        assert_eq!(entry.properties.len(), 13);
+        assert_eq!(entry.properties.len(), 14);
 
         let Some(uid) = entry.properties.get(&0) else {
             panic!("UID entry not found");
