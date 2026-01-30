@@ -53,6 +53,7 @@ pub enum StreamStatus {
     Ready = 0x0,
     Busy = 0x1,
     NotSupported = 0x2,
+    NoSuchStream = 0x3,
 }
 
 pub const A3_STREAM_PAYLOAD_SIZE: usize = 8;

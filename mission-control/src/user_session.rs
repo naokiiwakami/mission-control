@@ -69,7 +69,7 @@ impl Session {
                 }
                 _ => {
                     let trimmed = line.trim().to_string();
-                    log::debug!("Received: {}", trimmed);
+                    log::debug!("User command: {}", trimmed);
                     let tokens: Vec<String> = Self::tokenize(&trimmed);
                     if tokens.is_empty() {
                         // do nothing

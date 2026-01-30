@@ -1,0 +1,6 @@
+module_type: 0xd0de
+module_type_name: Dummy
+properties:
+  - id: 3
+    name: count
+    value_type: u32

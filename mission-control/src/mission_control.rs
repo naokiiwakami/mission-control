@@ -438,7 +438,7 @@ async fn get_name_core(
     let wire_addr = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     // send request message
-    initiate_stream(
+    initiate_stream_command(
         &streams_tx,
         &can_tx,
         a3::A3_MC_REQUEST_NAME,
@@ -495,7 +495,7 @@ async fn get_config_core(
     let mut stream_resp_rx = Some(init_stream_resp_rx);
     let wire_num = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
-    initiate_stream(
+    initiate_stream_command(
         &streams_tx,
         &can_tx,
         a3::A3_MC_REQUEST_CONFIG,
@@ -567,8 +567,8 @@ async fn get_config_core(
     }
 }
 
-/// send request message and see if the counterpart is ready.
-async fn initiate_stream(
+/// keep sending streaming command request until the remote node is ready
+async fn initiate_stream_command(
     streams_tx: &Sender<streams::Operation>,
     can_tx: &Sender<CanMessage>,
     opcode: u8,
@@ -578,7 +578,7 @@ async fn initiate_stream(
 ) -> Result<()> {
     let wire_num = (wire_id - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
-    const MAX_TRIALS: usize = 3;
+    const MAX_TRIALS: usize = 9;
     let mut num_trials = 0usize;
     let mut sleep_millis = 100u64;
     loop {
@@ -634,37 +634,42 @@ async fn set_config_core(
     modules_tx: Sender<a3_modules::Operation>,
     id: u8,
     props: Vec<Property>,
-    wire_addr: u16,
+    wire_id: u16,
     init_stream_resp_rx: oneshot::Receiver<CanMessage>,
 ) -> Result<()> {
     let mut stream_resp_rx = Some(init_stream_resp_rx);
-    let wire_id = (wire_addr - a3::A3_ID_ADMIN_WIRES_BASE) as u8;
 
     // initiate modify config stream
-    a3_message::modify_config(can_tx.clone(), id, wire_id).await;
+    initiate_stream_command(
+        &streams_tx,
+        &can_tx,
+        a3::A3_MC_MODIFY_CONFIG,
+        id,
+        wire_id,
+        &mut stream_resp_rx,
+    )
+    .await?;
 
     // control the stream
     let mut encoder = PropertyEncoder::new(&props);
-    while !encoder.is_done() {
-        let Ok(result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
-        else {
-            return Err(AppError::timeout());
-        };
-
-        let message = result.unwrap();
-        if !message.is_remote() {
-            log::warn!("arrived frame is not remote, sending data anyway");
-        }
+    loop {
         let mut out_message = CanMessage::new();
-        out_message.set_id(wire_addr as u32);
+        out_message.set_id(wire_id as u32);
         out_message.set_extended(false);
         out_message.set_remote(false);
         let num_flushed_bytes = encoder.flush(out_message.mut_data());
         out_message.set_data_length(num_flushed_bytes as u8);
         if !encoder.is_done() {
-            stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_addr).await?);
+            stream_resp_rx.replace(continue_stream(streams_tx.clone(), wire_id).await?);
         }
         can_tx.send(out_message).await.unwrap();
+        if encoder.is_done() {
+            break;
+        }
+        let Ok(_result) = timeout(Duration::from_secs(10), stream_resp_rx.take().unwrap()).await
+        else {
+            return Err(AppError::timeout());
+        };
     }
     let mut name: Option<String> = None;
     for prop in &props {
