@@ -1,6 +1,6 @@
-use std::cmp::min;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::{cmp::min, num::ParseIntError};
 
 use crate::error::{AppError, ErrorType};
 
@@ -161,19 +161,19 @@ impl Property {
     ) -> std::result::Result<Self, AppError> {
         match value_type {
             ValueType::U8 => {
-                let Ok(value) = src.parse() else {
+                let Ok(value) = parse_u8(src) else {
                     return Self::make_error();
                 };
                 Ok(Self::u8(id, value))
             }
             ValueType::U16 => {
-                let Ok(value) = src.parse() else {
+                let Ok(value) = parse_u16(src) else {
                     return Self::make_error();
                 };
                 Ok(Self::u16(id, value))
             }
             ValueType::U32 => {
-                let Ok(value) = src.parse() else {
+                let Ok(value) = parse_u32(src) else {
                     return Self::make_error();
                 };
                 Ok(Self::u32(id, value))
@@ -189,7 +189,7 @@ impl Property {
                 let src_array = Self::split(src);
                 let mut out: Vec<u8> = Vec::new();
                 for element in src_array {
-                    let Ok(value) = element.parse() else {
+                    let Ok(value) = parse_u8(&element) else {
                         return Self::make_error();
                     };
                     out.push(value);
@@ -200,7 +200,7 @@ impl Property {
                 let src_array = Self::split(src);
                 let mut out: Vec<u16> = Vec::new();
                 for element in src_array {
-                    let Ok(value) = element.parse() else {
+                    let Ok(value) = parse_u16(&element) else {
                         return Self::make_error();
                     };
                     out.push(value);
@@ -877,4 +877,30 @@ mod tests {
 
         assert_eq!(encoder.flush(&mut data), 0);
     }
+}
+
+// primitive parsers ///////////////////////////////////////////
+
+fn parse_uint<T>(
+    src: &str,
+    from_str_radix: fn(&str, u32) -> core::result::Result<T, ParseIntError>,
+) -> core::result::Result<T, ParseIntError> {
+    let s = src.trim();
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        from_str_radix(hex, 16)
+    } else {
+        from_str_radix(s, 10)
+    }
+}
+
+pub fn parse_u8(src: &str) -> core::result::Result<u8, ParseIntError> {
+    parse_uint(src, u8::from_str_radix)
+}
+
+pub fn parse_u16(src: &str) -> core::result::Result<u16, ParseIntError> {
+    parse_uint(src, u16::from_str_radix)
+}
+
+pub fn parse_u32(src: &str) -> core::result::Result<u32, ParseIntError> {
+    parse_uint(src, u32::from_str_radix)
 }

@@ -249,8 +249,8 @@ impl Session {
     async fn set_property(&mut self, command: &str, tokens: &Vec<String>) -> std::io::Result<()> {
         let specs = vec![
             Spec::u8("id", true),
-            Spec::str("prop", true),
-            Spec::str("name", true),
+            Spec::str("prop-name", true),
+            Spec::str("value", true),
         ];
         let Some(params) = self.parse_params(command, tokens, &specs).await.unwrap() else {
             return Ok(());
